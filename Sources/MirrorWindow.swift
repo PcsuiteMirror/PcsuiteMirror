@@ -570,8 +570,14 @@ final class MirrorInputView: NSView {
     override func mouseExited(with e: NSEvent) { cursorLayer.isHidden = true }
     override func mouseMoved(with e: NSEvent) { moveCursor(e) }
 
-    private func moveCursor(_ e: NSEvent) {
-        let p = loc(e)
+    /// When `clamp` is true the disc is pulled to the nearest picture edge instead of
+    /// following the raw pointer — used while a drag is held outside the screen.
+    private func moveCursor(_ e: NSEvent, clamp: Bool = false) {
+        var p = loc(e)
+        if clamp, let rect = fitRect() {
+            p.x = min(max(p.x, rect.minX), rect.maxX)
+            p.y = min(max(p.y, rect.minY), rect.maxY)
+        }
         lastPoint = p
         withoutImplicitAnimation {
             cursorLayer.position = p
@@ -653,10 +659,19 @@ final class MirrorInputView: NSView {
         }
     }
 
-    private func map(_ p: CGPoint) -> (Int, Int, Int, Int)? {
-        guard let rect = fitRect(), rect.contains(p) else { return nil }
-        let nx = (p.x - rect.minX) / rect.width
-        let ny = (p.y - rect.minY) / rect.height
+    /// When `clamp` is true, points outside the picture are pulled to the nearest edge
+    /// instead of rejected — so an in-progress drag/release that left the screen still
+    /// maps to a valid phone coordinate and reaches the phone.
+    private func map(_ p: CGPoint, clamp: Bool = false) -> (Int, Int, Int, Int)? {
+        guard let rect = fitRect() else { return nil }
+        var nx = (p.x - rect.minX) / rect.width
+        var ny = (p.y - rect.minY) / rect.height
+        if clamp {
+            nx = min(max(nx, 0), 1)
+            ny = min(max(ny, 0), 1)
+        } else if !rect.contains(p) {
+            return nil
+        }
         let vx = Int((nx * videoSize.width).rounded())
         let vy = Int(((1 - ny) * videoSize.height).rounded()) // flip y to top-left origin
         return (vx, vy, Int(videoSize.width), Int(videoSize.height))
@@ -673,17 +688,35 @@ final class MirrorInputView: NSView {
 
     private func loc(_ e: NSEvent) -> CGPoint { convert(e.locationInWindow, from: nil) }
 
-    private func send(_ action: UInt8, _ button: UInt8, _ e: NSEvent) {
-        guard let m = map(loc(e)) else { return }
-        onMouse?(action, button, m.0, m.1, m.2, m.3)
-    }
+    override func mouseDown(with e: NSEvent) { trackDrag(e, button: 1) }
+    override func rightMouseDown(with e: NSEvent) { trackDrag(e, button: 2) }
 
-    override func mouseDown(with e: NSEvent) { moveCursor(e); tapFeedback(at: loc(e)); send(0, 1, e) }
-    override func mouseDragged(with e: NSEvent) { moveCursor(e); send(2, 1, e) }
-    override func mouseUp(with e: NSEvent) { moveCursor(e); send(1, 1, e) }
-    override func rightMouseDown(with e: NSEvent) { moveCursor(e); send(0, 2, e) }
-    override func rightMouseDragged(with e: NSEvent) { moveCursor(e); send(2, 2, e) }
-    override func rightMouseUp(with e: NSEvent) { moveCursor(e); send(1, 2, e) }
+    /// Drive a whole press→drag→release as a modal mouse-tracking loop. A drag that
+    /// leaves this small borderless window otherwise stops getting `mouseDragged`/
+    /// `mouseUp` delivered to the view — so the release never reaches the phone and the
+    /// gesture freezes (page stuck mid-swipe). Pulling the events from the app queue
+    /// ourselves guarantees we see every move and the release no matter where the
+    /// pointer is, clamp them to the screen edge, and always send the touch-up so the
+    /// phone completes the gesture.
+    private func trackDrag(_ down: NSEvent, button: UInt8) {
+        moveCursor(down)
+        guard let m = map(loc(down)) else { return }   // press on the letterbox → no touch
+        if button == 1 { tapFeedback(at: loc(down)) }
+        onMouse?(0, button, m.0, m.1, m.2, m.3)
+
+        let mask: NSEvent.EventTypeMask = button == 1
+            ? [.leftMouseDragged, .leftMouseUp]
+            : [.rightMouseDragged, .rightMouseUp]
+        let upType: NSEvent.EventType = button == 1 ? .leftMouseUp : .rightMouseUp
+
+        while let ev = NSApp.nextEvent(matching: mask, until: .distantFuture,
+                                       inMode: .eventTracking, dequeue: true) {
+            let up = ev.type == upType
+            moveCursor(ev, clamp: true)
+            if let p = map(loc(ev), clamp: true) { onMouse?(up ? 1 : 2, button, p.0, p.1, p.2, p.3) }
+            if up { break }
+        }
+    }
 
     /// Trackpad scrolling is far finer-grained than a wheel notch — emitting one
     /// phone scroll per event makes it hyper-sensitive. Accumulate the precise
