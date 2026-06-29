@@ -26,6 +26,10 @@ final class AppModel: ObservableObject {
     /// Phone-reported secure-screen token ("" / "clear" = none; "password",
     /// "safety", "lockScreen" = a privacy screen the phone handles itself).
     @Published private(set) var privacyState: String = ""
+    /// Whether the phone's keyguard is locked (no frames until the user unlocks).
+    /// Tracked separately from `privacyState`: the phone reports its foreground-window
+    /// privacy as "clear" even while locked, so a single token can't carry both.
+    @Published private(set) var screenLocked: Bool = false
     /// Mirror-window link status (drives the reconnect overlay).
     @Published private(set) var mirrorLink: MirrorLink = .live
     /// Phone device info (storage capacity, model, OS) for the connected device;
@@ -440,7 +444,7 @@ final class AppModel: ObservableObject {
             self.mirroring = on
             self.displayLayer = layer
             if !on {
-                self.videoSize = .zero; self.privacyState = ""
+                self.videoSize = .zero; self.privacyState = ""; self.screenLocked = false
                 self.mirrorFPS = 0; self.mirrorLatencyMs = 0
             }
         }
@@ -449,6 +453,7 @@ final class AppModel: ObservableObject {
             self?.mirrorLatencyMs = lat
         }
         controller.onPrivacy = { [weak self] tok in self?.privacyState = tok }
+        controller.onLock = { [weak self] locked in self?.screenLocked = locked }
         controller.onInputState = { [weak self] active, hasCaret, x, y in
             guard let self else { return }
             self.imeActiveSink?(active)        // gate the keyboard on input mode

@@ -19,9 +19,12 @@ enum AndroidKey {
 // MARK: - Chrome bars (SwiftUI: just the buttons; bg + geometry are AppKit/CoreAnimation)
 
 /// Published chrome progress (0 hidden → 1 shown). Set by the AppKit container; the
-/// SwiftUI bars animate themselves off it.
+/// SwiftUI bars animate themselves off it. `pinned` force-shows the bars at full
+/// opacity regardless of `p` (used while a lock/privacy overlay is up, so the window
+/// controls stay visible without the user having to hover to reveal them).
 final class ChromeProgress: ObservableObject {
     @Published var p: CGFloat = 0
+    @Published var pinned: Bool = false
 }
 
 /// The title bar (top) and Android nav keys (bottom). Transparent elsewhere so the
@@ -34,13 +37,14 @@ struct MirrorChromeView: View {
     let onKey: (Int) -> Void
 
     var body: some View {
-        let p = progress.p
+        let p = progress.pinned ? 1 : progress.p   // pinned → fully shown, ignore hover progress
         VStack(spacing: 0) {
             titleBar.opacity(Double(p)).offset(y: -(1 - p) * 6)
             Spacer(minLength: 0)
             navBar.opacity(Double(p)).offset(y: (1 - p) * 6)
         }
         .animation(.easeInOut(duration: 0.24), value: progress.p)
+        .animation(.easeInOut(duration: 0.24), value: progress.pinned)
     }
 
     private var titleBar: some View {
@@ -76,8 +80,14 @@ final class PrivacyOverlayModel: ObservableObject {
 /// A frosted panel covering the picture while the phone shows a secure surface
 /// (fingerprint / password / lock screen). The phone stops streaming then, so
 /// this replaces the frozen / black picture with a clear instruction.
+///
+/// The lock screen gets its own directive copy: the phone holds the stream until
+/// the user unlocks and then resumes on its own, so we tell the user exactly that
+/// (rather than the generic "handle on phone" line used for password/secure).
 struct PrivacyOverlay: View {
     @ObservedObject var model: PrivacyOverlayModel
+
+    private var isLock: Bool { model.kind == "lockScreen" }
 
     private var symbol: String {
         switch model.kind {
@@ -85,6 +95,15 @@ struct PrivacyOverlay: View {
         case "password": return "rectangle.and.pencil.and.ellipsis"
         default: return "lock.shield.fill"   // "safety" / fingerprint / secure
         }
+    }
+
+    private var title: String {
+        isLock ? L("手机已锁屏") : L("隐私操作请在手机端处理")
+    }
+
+    /// Secondary line (lock screen only): why nothing is happening + that it's automatic.
+    private var subtitle: String? {
+        isLock ? L("请在手机上解锁，投屏将自动继续") : nil
     }
 
     var body: some View {
@@ -100,17 +119,27 @@ struct PrivacyOverlay: View {
                     Image(systemName: symbol)
                         .font(.system(size: 40, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.95))
-                    Text(L("隐私操作请在手机端处理"))
+                    Text(title)
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(.white.opacity(0.95))
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding(28)
                 .transition(.opacity)
             }
         }
-        .allowsHitTesting(model.active)   // block stray clicks only while secure
+        // Block stray clicks on the (frozen) picture while secure/locked. The window
+        // controls aren't affected: the manager pins the chrome open while this is up,
+        // and the title bar / traffic lights sit in the margins, outside this overlay.
+        .allowsHitTesting(model.active)
         .animation(.easeInOut(duration: 0.2), value: model.active)
     }
 }
@@ -362,9 +391,16 @@ final class MirrorContainerView: NSView {
     private func layoutContent() {
         chromeHost.frame = bounds
         withoutImplicitAnimation {
+            // With a known picture size the video sits in the chrome margins; without
+            // one (no frames yet — e.g. the phone is locked and streaming nothing) we
+            // still inset by the margins instead of filling `bounds`, so the privacy /
+            // lock overlay never covers the title bar and the window controls stay
+            // reachable above it.
             let videoRect = screenSize.width > 1
                 ? NSRect(x: kInset, y: kNav, width: screenSize.width, height: screenSize.height)
-                : bounds
+                : NSRect(x: kInset, y: kNav,
+                         width: max(0, bounds.width - 2 * kInset),
+                         height: max(0, bounds.height - kBar - kNav))
             video.frame = videoRect
             overlayHost.frame = videoRect   // privacy panel covers the picture
         }
@@ -482,6 +518,16 @@ final class MirrorInputView: NSView {
     /// Whether the phone currently has a focused text field. The keyboard only
     /// types to the phone while this is true.
     var phoneInputActive = false
+    /// Whether a privacy/lock overlay is covering the picture. While it is, the picture
+    /// isn't interactive (the overlay eats mouse events), so we stop hiding the system
+    /// arrow behind the touch disc — otherwise the pointer would vanish over the prompt.
+    var overlayActive = false {
+        didSet {
+            guard overlayActive != oldValue else { return }
+            if overlayActive { cursorLayer.isHidden = true }   // drop the (now-stale) touch disc
+            window?.invalidateCursorRects(for: self)
+        }
+    }
 
     // Touch-style pointer: the system arrow is hidden over the picture and replaced
     // by a soft translucent disc that follows the pointer and ripples on click.
@@ -552,7 +598,10 @@ final class MirrorInputView: NSView {
     /// A fully transparent cursor so only our drawn disc shows over the picture.
     private static let blankCursor: NSCursor = NSCursor(image: NSImage(size: NSSize(width: 1, height: 1)), hotSpot: .zero)
 
-    override func resetCursorRects() { addCursorRect(bounds, cursor: Self.blankCursor) }
+    override func resetCursorRects() {
+        if overlayActive { return }   // overlay up → let the normal system arrow show
+        addCursorRect(bounds, cursor: Self.blankCursor)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -846,6 +895,10 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
     private let statsOverlay = StatsOverlayModel()
     private var bag = Set<AnyCancellable>()
     private var baseScreenH: CGFloat = 640   // screen height in points; window = screen + chrome
+    /// While a privacy/lock overlay is up, the window chrome is force-revealed and
+    /// held (the hover-to-reveal is unreliable under a full-picture overlay), so the
+    /// user can always reach close / move while the (possibly long-lived) prompt is up.
+    private var chromePinned = false
 
     init(model: AppModel) { self.model = model }
 
@@ -891,7 +944,10 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
         overlayHost.layer?.backgroundColor = .clear
 
         let container = MirrorContainerView(video: video, chromeHost: chromeHost, overlayHost: overlayHost, progress: chromeProgress)
-        container.onHover = { [weak self] hovering in self?.container?.setProgress(hovering ? 1 : 0, animated: true) }
+        container.onHover = { [weak self] hovering in
+            guard let self, !self.chromePinned else { return }   // pinned: ignore hover, stay revealed
+            self.container?.setProgress(hovering ? 1 : 0, animated: true)
+        }
 
         w.contentView = container
         w.isOpaque = false
@@ -918,9 +974,16 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] sz in self?.applyAspect(sz) }
             .store(in: &bag)
+        // The overlay/chrome reflect BOTH the keyguard lock and the foreground-window
+        // privacy state; the lock takes precedence (its own prompt). Recompute on any
+        // change to either.
         model.$privacyState
             .receive(on: RunLoop.main)
-            .sink { [weak self] tok in self?.privacyOverlay.kind = tok }
+            .sink { [weak self] _ in self?.refreshPrivacyChrome() }
+            .store(in: &bag)
+        model.$screenLocked
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.refreshPrivacyChrome() }
             .store(in: &bag)
         model.$mirrorLink
             .receive(on: RunLoop.main)
@@ -952,6 +1015,22 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
     }
 
     func close() { window?.close() }
+
+    /// Recompute the privacy/lock overlay + chrome from the model. The keyguard lock
+    /// takes precedence over foreground-window privacy (its own "please unlock" prompt).
+    /// While either is active the chrome is pinned open so the window controls stay
+    /// reachable without hovering (`pinned` force-shows the bars; `setProgress(1)` grows
+    /// the frame so they sit on the opaque chrome backing, not a transparent margin).
+    private func refreshPrivacyChrome() {
+        privacyOverlay.kind = model.screenLocked ? "lockScreen" : model.privacyState
+        let active = privacyOverlay.active
+        video?.overlayActive = active   // show the system arrow over the prompt (picture isn't interactive)
+        chromeProgress.pinned = active
+        if active != chromePinned {
+            chromePinned = active
+            container?.setProgress(active ? 1 : 0, animated: true)
+        }
+    }
 
     /// Fit the window (fixed size) to the phone's aspect ratio: screen = baseScreenH tall,
     /// window = screen + chrome margins. Repositions the picture + frame layer.
@@ -995,6 +1074,8 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
         model.imeActiveSink = nil
         model.stopMirror()
         window = nil; container = nil; video = nil
+        chromePinned = false
+        chromeProgress.pinned = false
         NSApp.setActivationPolicy(.accessory) // back to menu-bar agent
     }
 }

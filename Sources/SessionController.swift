@@ -51,6 +51,12 @@ final class SessionController {
     /// Privacy / secure-screen state token ("clear" / "password" / "safety" /
     /// "lockScreen"). Delivered on the main queue while mirroring.
     var onPrivacy: ((String) -> Void)?
+    /// Device keyguard lock state, delivered on the main queue while mirroring. `true`
+    /// when the phone reports `DEVICE_INFO:is_lock` (no frames will arrive until the
+    /// user unlocks); cleared when real frames resume. Tracked separately from
+    /// `onPrivacy` because the phone reports foreground-window privacy as "clear" even
+    /// while the keyguard is locked.
+    var onLock: ((Bool) -> Void)?
     /// Phone IME state, delivered on the main queue while mirroring:
     /// `(active, hasCaret, caretX, caretY)`. `active` = a text field is focused
     /// (so the keyboard should type); `caret*` is the on-device caret in mirror
@@ -93,6 +99,11 @@ final class SessionController {
     // True while the phone reports a secure/privacy screen (touched on `queue`).
     // The phone stops the video then, so we suppress black-screen recovery.
     private var privacyActive = false
+    // True while the phone's keyguard is locked (`DEVICE_INFO:is_lock`; touched on
+    // `queue`). No frames arrive until the user unlocks, and the phone keeps the
+    // stream alive meanwhile — so, like `privacyActive`, this suppresses black-screen
+    // recovery (a restart can't un-lock the phone). Cleared when real frames resume.
+    private var lockActive = false
 
     // Black-screen recovery (touched on `queue`). If a freshly started stream delivers
     // no frame within a few seconds — the phone's screen service didn't fully reset
@@ -362,6 +373,14 @@ final class SessionController {
                             self?.queue.async {
                                 self?.firstFrameSeen = true
                                 self?.mirrorRecoveries = 0   // healthy → restore retry budget
+                                // A real frame means the keyguard is gone (no frames flow
+                                // while locked) — clear the lock prompt. This is the
+                                // authoritative unlock signal; the phone's NOTIFY_PASS
+                                // never reliably reports the keyguard clearing.
+                                if self?.lockActive == true {
+                                    self?.lockActive = false
+                                    self?.emit { self?.onLock?(false) }
+                                }
                             }
                         }
                         f.handle(Data(bytes: v.as_ptr(), count: n))
@@ -386,15 +405,24 @@ final class SessionController {
                 // it shows a secure surface (fingerprint, password, lock screen)
                 // and pushes a state token; the UI shows a "handle on phone" hint.
                 privacyActive = false
+                lockActive = false
                 let pdone = DispatchSemaphore(value: 0)
                 privacyDone = pdone
                 let privacyPump = Thread { [weak self] in
                     while true {
                         let tok = sc.next_privacy_event().toString()
                         if tok.isEmpty { break }     // stopped or stream ended
-                        let active = (tok != "clear")
-                        self?.queue.async { self?.privacyActive = active }
-                        self?.emit { self?.onPrivacy?(tok) }
+                        if tok == "screenLocked" {
+                            // Keyguard lock (DEVICE_INFO:is_lock) — its own state, NOT a
+                            // privacy token. Cleared by the first real frame (the unlock
+                            // signal), not by the phone's NOTIFY_PASS:clear.
+                            self?.queue.async { self?.lockActive = true }
+                            self?.emit { self?.onLock?(true) }
+                        } else {
+                            let active = (tok != "clear")
+                            self?.queue.async { self?.privacyActive = active }
+                            self?.emit { self?.onPrivacy?(tok) }
+                        }
                     }
                     pdone.signal()
                 }
@@ -443,7 +471,8 @@ final class SessionController {
         queue.asyncAfter(deadline: .now() + mirrorRecoverDelay) { [weak self] in
             guard let self,
                   self.mirrorGen == gen, self.screen != nil, !self.firstFrameSeen,
-                  !self.privacyActive  // black screen is expected during a secure screen
+                  !self.privacyActive,  // black screen is expected during a secure screen
+                  !self.lockActive      // …or while the keyguard is locked (no restart can fix that)
             else { return }
             guard self.mirrorRecoveries < self.mirrorRecoverMax else {
                 log("mirror still black after \(self.mirrorRecoveries) recoveries; leaving as-is")
@@ -471,6 +500,7 @@ final class SessionController {
         privacyDone = nil
         cursorDone = nil
         privacyActive = false
+        lockActive = false
         screen = nil
         feeder = nil
         emitMirroring(false, nil)
