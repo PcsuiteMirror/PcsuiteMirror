@@ -28,8 +28,8 @@ targets:
         INFOPLIST_KEY_LSUIElement: "YES"
         PRODUCT_BUNDLE_IDENTIFIER: tech.xvanturing.vi-conn
         # Bumped by scripts/release.sh; "0.0.0"/build 0 is the unreleased baseline.
-        MARKETING_VERSION: "0.0.2"
-        CURRENT_PROJECT_VERSION: "4"
+        MARKETING_VERSION: "0.0.3"
+        CURRENT_PROJECT_VERSION: "5"
         # App icon lives in Sources/Resources/Assets.xcassets (built by scripts/make-icon.sh).
         # GENERATE_INFOPLIST_FILE picks up CFBundleIconName from this automatically.
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
