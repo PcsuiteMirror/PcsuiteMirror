@@ -29,12 +29,24 @@ final class ChromeProgress: ObservableObject {
 
 /// The title bar (top) and Android nav keys (bottom). Transparent elsewhere so the
 /// frame layer and the video (behind/around it) show through.
+/// Speaker-button state. Its own model (like the overlays) so the chrome view never
+/// holds `AppModel` — the manager's reference to it is deliberately `unowned`, and a
+/// SwiftUI `@ObservedObject` would be a strong one.
+final class AudioChromeModel: ObservableObject {
+    /// The phone is routing its audio here (otherwise there's nothing local to mute).
+    @Published var routedToMac = false
+    @Published var muted = false
+}
+
 struct MirrorChromeView: View {
     @ObservedObject var progress: ChromeProgress
+    /// Observed so the icon follows a mute toggled from the menu bar too.
+    @ObservedObject var audio: AudioChromeModel
     let onClose: () -> Void
     let onMinimize: () -> Void
     let onZoom: () -> Void
     let onKey: (Int) -> Void
+    let onToggleMute: () -> Void
 
     var body: some View {
         let p = progress.pinned ? 1 : progress.p   // pinned → fully shown, ignore hover progress
@@ -53,8 +65,16 @@ struct MirrorChromeView: View {
             HStack {
                 TrafficLights(onClose: onClose, onMinimize: onMinimize, onZoom: onZoom)
                 Spacer()
+                // Mute this Mac. Only meaningful while the phone is routing its audio
+                // here — otherwise the sound is coming out of the phone and there is
+                // nothing local to silence.
+                if audio.routedToMac {
+                    NavKey(symbol: audio.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                           action: onToggleMute)
+                        .help(audio.muted ? L("Unmute this Mac") : L("Mute this Mac"))
+                }
             }
-            .padding(.leading, 12)
+            .padding(.horizontal, 12)
         }
         .frame(height: kBar)
     }
@@ -893,6 +913,7 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
     private let privacyOverlay = PrivacyOverlayModel()
     private let linkOverlay = LinkOverlayModel()
     private let statsOverlay = StatsOverlayModel()
+    private let audioChrome = AudioChromeModel()
     private var bag = Set<AnyCancellable>()
     private var baseScreenH: CGFloat = 640   // screen height in points; window = screen + chrome
     /// While a privacy/lock overlay is up, the window chrome is force-revealed and
@@ -918,7 +939,10 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
         // invalidateShadow).
         let w = MirrorPanel(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: baseScreenH + kBar + kNav),
-            styleMask: [.borderless, .resizable],
+            // `.miniaturizable` is required even though we draw our own traffic
+            // lights: AppKit ignores miniaturize() on a borderless window without it
+            // (verified — with the flag it works, without it nothing happens).
+            styleMask: [.borderless, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
@@ -934,10 +958,12 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
 
         let chromeHost = NSHostingView(rootView: MirrorChromeView(
             progress: chromeProgress,
+            audio: audioChrome,
             onClose: { [weak self] in self?.model.closeMirror() },
             onMinimize: { [weak self] in self?.window?.miniaturize(nil) },
-            onZoom: { [weak self] in self?.window?.zoom(nil) },
-            onKey: { [weak self] code in self?.model.key(code) }
+            onZoom: { [weak self] in self?.toggleZoom() },
+            onKey: { [weak self] code in self?.model.key(code) },
+            onToggleMute: { [weak self] in self?.model.toggleAudioMuted() }
         ))
 
         let overlayHost = NSHostingView(rootView: MirrorOverlays(privacy: privacyOverlay, link: linkOverlay, stats: statsOverlay))
@@ -993,14 +1019,20 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] on in self?.statsOverlay.visible = on }
             .store(in: &bag)
-        model.$mirrorFPS
+        model.$audioEnabled
             .receive(on: RunLoop.main)
-            .sink { [weak self] v in self?.statsOverlay.fps = v }
+            .sink { [weak self] on in self?.audioChrome.routedToMac = on }
             .store(in: &bag)
-        model.$mirrorLatencyMs
+        model.$audioMuted
             .receive(on: RunLoop.main)
-            .sink { [weak self] v in self?.statsOverlay.latencyMs = v }
+            .sink { [weak self] on in self?.audioChrome.muted = on }
             .store(in: &bag)
+        // Per-second HUD stats. A closure, not a @Published subscription: publishing
+        // these on the model rebuilds the menu-bar dropdown every second.
+        model.mirrorStatsSink = { [weak self] fps, lat in
+            self?.statsOverlay.fps = fps
+            self?.statsOverlay.latencyMs = lat
+        }
         // Phone caret → place the IME there (mapped to view coords in firstRect).
         model.imeCursorSink = { [weak self] p in self?.video?.imeAnchorVideo = p }
         // Phone input mode → gate the keyboard (only type when a field is focused).
@@ -1046,6 +1078,35 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
         container.configure(screenSize: CGSize(width: screenW, height: screenH))
     }
 
+    /// Height to restore when un-zooming; non-nil only while zoomed.
+    private var unzoomedScreenH: CGFloat?
+
+    /// Grow the mirror to fill the screen's height, or restore the previous size.
+    ///
+    /// `NSWindow.zoom(_:)` is useless here: the window's size is derived from
+    /// `baseScreenH` through `applyAspect` (the picture is a fixed pixel size the
+    /// chrome grows around), so a frame AppKit picks on its own leaves the content
+    /// behind. Driving the same path that every other resize uses keeps the phone
+    /// aspect exact and the picture correctly laid out.
+    func toggleZoom() {
+        guard let w = window, model.videoSize.width > 0 else { return }
+        let visible = (w.screen ?? NSScreen.main)?.visibleFrame ?? .zero
+        if let restore = unzoomedScreenH {
+            baseScreenH = restore
+            unzoomedScreenH = nil
+        } else {
+            unzoomedScreenH = baseScreenH
+            baseScreenH = max(320, visible.height - kBar - kNav - 16)
+        }
+        applyAspect(model.videoSize)
+        // setContentSize keeps the bottom-left corner, so a grown window can run off
+        // the top of the screen. Nudge it back inside.
+        var f = w.frame
+        f.origin.x = min(max(f.origin.x, visible.minX), max(visible.maxX - f.width, visible.minX))
+        f.origin.y = min(max(f.origin.y, visible.minY), max(visible.maxY - f.height, visible.minY))
+        if f.origin != w.frame.origin { w.setFrameOrigin(f.origin) }
+    }
+
     /// Test hook (=2): jump to the hovered/grown state.
     func testForceHover() { container?.setProgress(1, animated: false) }
 
@@ -1072,6 +1133,7 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
         bag.removeAll()
         model.imeCursorSink = nil
         model.imeActiveSink = nil
+        model.mirrorStatsSink = nil
         model.stopMirror()
         window = nil; container = nil; video = nil
         chromePinned = false

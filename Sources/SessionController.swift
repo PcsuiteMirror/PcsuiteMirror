@@ -87,7 +87,13 @@ final class SessionController {
     private var frameDone: DispatchSemaphore?
     private var privacyDone: DispatchSemaphore?
     private var cursorDone: DispatchSemaphore?
+    private var audioDone: DispatchSemaphore?
     private var watchDone: DispatchSemaphore?
+
+    // Phone-audio playback, live while mirroring. `audioMuted` is remembered here so
+    // a mute set before/between streams still applies to the next player.
+    private var audioPlayer: MirrorAudioPlayer?
+    private var audioMuted = false
 
     // Disconnect bookkeeping (touched on `queue`). `connGen` rises on every connect
     // and every detected loss, so a watcher/recovery callback queued for a stale
@@ -475,6 +481,34 @@ final class SessionController {
                 cursorPump.name = "ime-cursor-pump"
                 cursorPump.start()
 
+                // Phone audio: the core demuxes AAC packets off the same mirror WS.
+                // The phone mutes its own speaker while it streams them, so this pump
+                // is the only thing that makes the sound audible anywhere.
+                //
+                // Armed unconditionally, even when the stream opened with the audio
+                // routed to the phone: routing is switchable live (setAudioToPC), and
+                // a pump that only exists at start would leave a mid-session switch
+                // silent. It costs one parked thread; with no audio arriving the
+                // player never even builds its graph.
+                let player = MirrorAudioPlayer()
+                player.muted = audioMuted
+                audioPlayer = player
+                let adone = DispatchSemaphore(value: 0)
+                audioDone = adone
+                let audioPump = Thread {
+                    while true {
+                        let v = sc.next_audio_frame()
+                        let n = Int(v.len())
+                        if n == 0 { break }     // stopped or stream ended
+                        player.feed(Data(bytes: v.as_ptr(), count: n))
+                    }
+                    adone.signal()
+                }
+                audioPump.name = "audio-pump"
+                audioPump.start()
+
+                if settings.audio { rearmPhoneAudio(gen: gen) }
+
                 emitMirroring(true, f.layer)
                 scheduleMirrorWatchdog(gen: gen, settings: settings)
                 // Banner labels the per-second `mirror_stats` / `mirror-pipe` lines that
@@ -512,16 +546,68 @@ final class SessionController {
         queue.async { [self] in stopMirrorLocked() }
     }
 
+    /// Make the phone actually start streaming audio for a freshly opened mirror.
+    ///
+    /// `SCREEN_START.no_audio:false` isn't reliable on its own: the phone only arms
+    /// capture there when its encoder wasn't already running (`ScreenController`:
+    /// `if (!isEncoderRunning) { … startRecord() }`), so a stream opened while a
+    /// previous one is still winding down comes up silent. The live routing message
+    /// has no such guard — but `startRecord()` *also* early-returns when the phone
+    /// believes it is already recording, a belief that survives a stream that ended
+    /// without a clean stop. So: stop first, then start. Both are no-ops when the
+    /// phone's state is already what we ask for.
+    private func rearmPhoneAudio(gen: Int) {
+        let stillLive: () -> PcSession? = { [weak self] in
+            guard let self, self.mirrorGen == gen, self.screen != nil else { return nil }
+            return self.session
+        }
+        queue.asyncAfter(deadline: .now() + 0.6) {
+            guard let s = stillLive() else { return }
+            _ = s.set_audio_to_pc(false)          // clear any stale capture state
+        }
+        queue.asyncAfter(deadline: .now() + 0.9) {
+            guard let s = stillLive() else { return }
+            let sent = s.set_audio_to_pc(true)
+            log("audio: asked the phone to start capture (delivered=\(sent))")
+        }
+    }
+
+    // MARK: - Audio controls (live, no stream restart)
+
+    /// Move the phone's audio between this Mac and the phone's own speaker while
+    /// mirroring. `SCREEN_START` carries the same choice for the *next* stream, so
+    /// a no-op here (not mirroring, or view-only) still takes effect on reconnect.
+    func setAudioToPC(_ toPC: Bool) {
+        queue.async { [self] in
+            guard let s = session, screen != nil else { return }
+            let ok = s.set_audio_to_pc(toPC)
+            log("audio → \(toPC ? "Mac" : "phone")\(ok ? "" : " (no control channel; applies next stream)")")
+        }
+    }
+
+    /// Silence this Mac's output without changing where the phone sends its audio.
+    func setAudioMuted(_ muted: Bool) {
+        queue.async { [self] in
+            audioMuted = muted
+            audioPlayer?.muted = muted
+            log("audio \(muted ? "muted" : "unmuted") on this Mac")
+        }
+    }
+
     private func stopMirrorLocked() {
         guard let sc = screen, let done = frameDone else { return }
         mirrorGen += 1                  // invalidate this stream's drop-recovery dispatch
-        sc.stop()                       // unblocks the frame, privacy and IME pumps
+        sc.stop()                       // unblocks the frame, privacy, IME and audio pumps
         done.wait()                     // block until the frame pump exits
         privacyDone?.wait()             // and the privacy pump
         cursorDone?.wait()              // and the IME-caret pump
+        audioDone?.wait()               // and the audio pump, if it was armed
+        audioPlayer?.stop()             // …then tear the playback graph down
+        audioPlayer = nil
         frameDone = nil
         privacyDone = nil
         cursorDone = nil
+        audioDone = nil
         privacyActive = false
         lockActive = false
         screen = nil

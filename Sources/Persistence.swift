@@ -266,8 +266,11 @@ enum Store {
         get { MirrorFrameRate(rawValue: d.string(forKey: "frameRate") ?? "") ?? .auto }
         set { d.set(newValue.rawValue, forKey: "frameRate") }
     }
+    /// Play the phone's audio on this Mac while mirroring. On by default: it's what
+    /// the official client does (the phone mutes its own speaker and the PC becomes
+    /// the output), and mirroring a video with no sound reads as a bug.
     static var mirrorAudio: Bool {
-        get { d.bool(forKey: "mirrorAudio") }   // default off
+        get { flag("mirrorAudio", default: true) }
         set { d.set(newValue, forKey: "mirrorAudio") }
     }
     static var clipboardDirection: ClipboardDirection {

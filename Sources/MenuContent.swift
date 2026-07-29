@@ -57,6 +57,15 @@ struct MenuContent: View {
             Button(model.mirroring ? L("Stop mirroring") : L("Start mirroring")) {
                 if model.mirroring { model.closeMirror() } else { model.openMirror() }
             }
+            // Where the sound comes out. Switchable live — the picture keeps running.
+            Button(model.audioEnabled ? L("Move audio back to phone") : L("Move audio to this Mac")) {
+                model.setAudio(!model.audioEnabled)
+            }
+            if model.audioEnabled {
+                Button(model.audioMuted ? L("Unmute this Mac") : L("Mute this Mac")) {
+                    model.toggleAudioMuted()
+                }
+            }
             Button(L("Disconnect")) { model.disconnect() }
         } else {
             Button(L("Connect over Wi-Fi")) { model.connect(dev, method: .lan) }

@@ -43,6 +43,12 @@
 
 /* mirror resolution */
 "Mirror resolution" = "Mirror resolution";
+"Play phone audio on this Mac" = "Play phone audio on this Mac";
+"Move audio to this Mac" = "Move audio to this Mac";
+"Move audio back to phone" = "Move audio back to phone";
+"Mute this Mac" = "Mute this Mac";
+"Unmute this Mac" = "Unmute this Mac";
+"The phone mutes its own speaker while streaming audio." = "The phone mutes its own speaker while streaming audio.";
 "Show FPS & latency" = "Show FPS & latency";
 "High (full)" = "High (full)";
 "Medium (1280)" = "Medium (1280)";

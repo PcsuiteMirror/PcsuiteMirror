@@ -18,10 +18,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var mirroring = false
     @Published private(set) var displayLayer: AVSampleBufferDisplayLayer?
     @Published private(set) var videoSize: CGSize = .zero
-    /// Live playback stats (0 when not mirroring). `mirrorLatencyMs` is the PC
-    /// pipeline cost (frame off the core → enqueued for display), not glass-to-glass.
-    @Published private(set) var mirrorFPS: Double = 0
-    @Published private(set) var mirrorLatencyMs: Double = 0
     @Published private(set) var lastCode: String?
     /// Phone-reported secure-screen token ("" / "clear" = none; "password",
     /// "safety", "lockScreen" = a privacy screen the phone handles itself).
@@ -50,9 +46,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var resolution: MirrorResolution
     @Published private(set) var bitrate: MirrorBitrate
     @Published private(set) var frameRate: MirrorFrameRate
-    /// Request the phone's audio stream (no_audio=false). Demuxed off the video path
-    /// but not yet decoded/played — see AudioProbe in the core.
+    /// Route the phone's audio to this Mac (`no_audio=false`). While it streams, the
+    /// phone mutes its own speaker — so this is "where does the sound come out",
+    /// not "is there sound".
     @Published private(set) var audioEnabled: Bool
+    /// Mac-side mute: the phone keeps streaming, this Mac just stays silent.
+    /// Session-only (see `setAudioMuted`).
+    @Published private(set) var audioMuted = false
     @Published private(set) var lastDevice: DeviceRef?
     /// The remembered-device roster (device-centric; most-recent first).
     @Published private(set) var knownDevices: [KnownDevice]
@@ -77,6 +77,13 @@ final class AppModel: ObservableObject {
     /// Set by the mirror window: whether the phone has a focused text field, so
     /// the keyboard only types in input mode.
     var imeActiveSink: ((Bool) -> Void)?
+    /// Set by the mirror window: live playback stats `(fps, pipelineLatencyMs)` for
+    /// the HUD (latency is the PC pipeline cost, not glass-to-glass). A plain closure
+    /// rather than `@Published` for the same reason as the caret above, and here it's
+    /// load-bearing: these tick every second while mirroring, and anything published
+    /// on the model rebuilds the menu-bar dropdown — which closes whatever submenu
+    /// the pointer is in, making the menu impossible to use during a mirror.
+    var mirrorStatsSink: ((Double, Double) -> Void)?
 
     init() {
         autoReconnect = Store.autoReconnect
@@ -332,13 +339,29 @@ final class AppModel: ObservableObject {
         if mirroring { controller.restartMirror(settings: mirrorSettings) }
     }
 
-    /// Toggle phone-audio request; restarts the live stream if mirroring.
+    /// Route the phone's audio to this Mac (on) or leave it on the phone (off).
+    ///
+    /// Applied to a live mirror without restarting it — the phone accepts the switch
+    /// on the control channel — so toggling this never interrupts the picture.
+    /// `SCREEN_START` carries the same choice for the next stream.
     func setAudio(_ on: Bool) {
         guard on != audioEnabled else { return }
         audioEnabled = on
         Store.mirrorAudio = on
-        if mirroring { controller.restartMirror(settings: mirrorSettings) }
+        controller.setAudioToPC(on)
     }
+
+    /// Silence this Mac only: the phone keeps streaming (and stays muted itself), so
+    /// nothing plays anywhere until unmuted. Deliberately **not** persisted — an app
+    /// that starts up silently for a forgotten reason reads as broken; the durable
+    /// "I don't want phone audio here" preference is `audioEnabled` above.
+    func setAudioMuted(_ on: Bool) {
+        guard on != audioMuted else { return }
+        audioMuted = on
+        controller.setAudioMuted(on)
+    }
+
+    func toggleAudioMuted() { setAudioMuted(!audioMuted) }
 
     /// Open the mirror window (which begins mirroring) / close it (which stops).
     func openMirror() { mirror.show() }
@@ -445,12 +468,11 @@ final class AppModel: ObservableObject {
             self.displayLayer = layer
             if !on {
                 self.videoSize = .zero; self.privacyState = ""; self.screenLocked = false
-                self.mirrorFPS = 0; self.mirrorLatencyMs = 0
+                self.mirrorStatsSink?(0, 0)
             }
         }
         controller.onStats = { [weak self] fps, lat in
-            self?.mirrorFPS = fps
-            self?.mirrorLatencyMs = lat
+            self?.mirrorStatsSink?(fps, lat)
         }
         controller.onPrivacy = { [weak self] tok in self?.privacyState = tok }
         controller.onLock = { [weak self] locked in self?.screenLocked = locked }

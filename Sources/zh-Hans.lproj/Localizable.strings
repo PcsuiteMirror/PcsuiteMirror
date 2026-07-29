@@ -43,6 +43,12 @@
 
 /* mirror resolution */
 "Mirror resolution" = "投屏分辨率";
+"Play phone audio on this Mac" = "在本 Mac 播放手机声音";
+"Move audio to this Mac" = "声音流转到本 Mac";
+"Move audio back to phone" = "声音转回手机";
+"Mute this Mac" = "本 Mac 静音";
+"Unmute this Mac" = "取消本 Mac 静音";
+"The phone mutes its own speaker while streaming audio." = "传输声音期间手机自身扬声器会静音。";
 "Show FPS & latency" = "显示 FPS 与延迟";
 "High (full)" = "高（原始）";
 "Medium (1280)" = "中（1280）";

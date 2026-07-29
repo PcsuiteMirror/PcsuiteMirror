@@ -148,7 +148,10 @@ struct PreferencesView: View {
                     Picker(L("Mirror frame rate"), selection: frameRate) {
                         ForEach(MirrorFrameRate.allCases) { Text($0.label).tag($0) }
                     }
-                    Toggle(L("Phone audio (experimental)"), isOn: audio)
+                    Toggle(L("Play phone audio on this Mac"), isOn: audio)
+                    Text(L("The phone mutes its own speaker while streaming audio."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Toggle(L("Show FPS & latency"), isOn: $model.showStats)
                 } header: {
                     Text(L("Connection"))
