@@ -117,7 +117,11 @@ final class SessionController {
 
     private let lock = NSLock()
     private var sessionRef: PcSession?   // lock-guarded snapshot for input dispatch
-    private var cancelRequested = false  // lock-guarded
+    // Connect-attempt generation (lock-guarded). Bumped when an attempt starts and
+    // when one is cancelled, so a connect whose result arrives late — cancelled, or
+    // superseded by a newer attempt — knows it is stale and stays silent instead of
+    // reporting state for a connection nobody is waiting for any more.
+    private var attemptGen = 0
 
     // Coalesced pointer-move state (lock-guarded).
     private var pendingMove: (UInt8, Int, Int, Int, Int)?
@@ -126,8 +130,9 @@ final class SessionController {
     // MARK: - Connect / disconnect
 
     func connect(_ device: DeviceRef, features: ConnectFeatures, reconnect: Bool) {
-        lock.lock(); cancelRequested = false; lock.unlock()
+        let gen = beginAttempt()
         queue.async { [self] in
+            guard !isStale(gen) else { return }    // cancelled before we even started
             teardownLocked()                       // ensure any prior session is gone
             emitState(reconnect ? .reconnecting(device) : .connecting(device))
             do {
@@ -151,15 +156,18 @@ final class SessionController {
                     log("LAN connect \(ip) connectType=\(remote ? 1 : 2)")
                     s = try pcsuite_connect_lan(ip, remote)
                 }
-                if isCancelled() {                 // user cancelled mid-connect → discard
+                if isStale(gen) {                  // cancelled mid-connect → discard
+                    // Dropping `s` releases the Rust session, which closes the
+                    // control WS the phone would otherwise keep reserved.
                     log("connect cancelled; discarding session")
-                    emitState(.disconnected)
                     return
                 }
                 finishConnect(s, device: device, features: features)
             } catch {
-                if isCancelled() { emitState(.disconnected) }
-                else { emitState(.failed(ffiMessage(error))) }
+                // A stale attempt stays silent: `cancel()` already put the UI back to
+                // .disconnected, and a late .failed would clobber whatever the user
+                // has started since.
+                if !isStale(gen) { emitState(.failed(ffiMessage(error))) }
                 log("connect failed: \(ffiMessage(error))")
             }
         }
@@ -198,8 +206,9 @@ final class SessionController {
     /// phone to scan and report its IP to `:9199`. On a hit, resume on `queue` and
     /// connect — emitting the same `.connected` state as any other transport.
     func pairAndConnect(features: ConnectFeatures, onQR: @escaping (String) -> Void) {
-        lock.lock(); cancelRequested = false; lock.unlock()
+        let gen = beginAttempt()
         queue.async { [self] in
+            guard !isStale(gen) else { return }
             teardownLocked()                    // ensure any prior session is gone
             applyIdentityToCore()               // nicer d=/u= in the QR (not required)
             let pairing = pcsuite_pair_begin("")  // "" → auto-detect this Mac's LAN IP
@@ -215,7 +224,7 @@ final class SessionController {
                     self.lock.lock(); self.pairing = nil; self.lock.unlock()
                     switch result {
                     case .success(let paired):
-                        if self.isCancelled() { self.emitState(.disconnected); return }
+                        if self.isStale(gen) { return }
                         let ip = paired.phone_ip().toString()
                         let name = paired.device_name().toString()
                         let dev = DeviceRef(transport: .lan,
@@ -223,16 +232,15 @@ final class SessionController {
                                             name: name.isEmpty ? nil : name)
                         do {
                             let s = try paired.connect()
-                            if self.isCancelled() { self.emitState(.disconnected); return }
+                            if self.isStale(gen) { return }
                             self.finishConnect(s, device: dev, features: features)
                             log("QR paired ✓ (\(name) \(ip))")
                         } catch {
-                            self.emitState(.failed(ffiMessage(error)))
+                            if !self.isStale(gen) { self.emitState(.failed(ffiMessage(error))) }
                             log("QR connect failed: \(ffiMessage(error))")
                         }
                     case .failure(let error):
-                        if self.isCancelled() { self.emitState(.disconnected) }
-                        else { self.emitState(.failed(ffiMessage(error))) }
+                        if !self.isStale(gen) { self.emitState(.failed(ffiMessage(error))) }
                         log("QR pairing ended: \(ffiMessage(error))")
                     }
                 }
@@ -242,11 +250,26 @@ final class SessionController {
         }
     }
 
-    /// Discard the result of an in-flight connect (the blocking Rust call can't be
-    /// aborted, but we drop whatever it returns).
+    /// Abandon an in-flight connect attempt.
+    ///
+    /// Everything here is deliberately *off* the serial `queue`: a connect is one
+    /// long blocking FFI call that occupies the queue for its whole duration, so a
+    /// cancel that queued behind it would only run once the thing it is meant to
+    /// cancel had already finished — which is exactly why cancelling a Wi-Fi connect
+    /// to a phone whose IP has changed appeared to do nothing at all.
+    /// So: bump the attempt generation (the result, whenever it lands, is now
+    /// stale), tell the core to drop the in-flight sockets, and put the UI back to
+    /// `.disconnected` right away.
     func cancel() {
-        lock.lock(); cancelRequested = true; let p = pairing; lock.unlock()
-        p?.cancel()   // abort an in-flight QR-pairing wait, freeing the :9199 listener
+        lock.lock(); attemptGen += 1; let p = pairing; lock.unlock()
+        p?.cancel()              // abort an in-flight QR wait, freeing the :9199 listener
+        pcsuite_cancel_connect() // abort the blocking connect_usb/connect_lan itself
+        // Only when nothing is established: `disconnect()` also routes through here,
+        // and it emits .disconnected itself once the live session is actually gone.
+        if snapshotSession() == nil {
+            emitState(.disconnected)
+            log("connect cancelled")
+        }
     }
 
     func disconnect() {
@@ -688,8 +711,18 @@ final class SessionController {
     private func snapshotSession() -> PcSession? {
         lock.lock(); defer { lock.unlock() }; return sessionRef
     }
-    private func isCancelled() -> Bool {
-        lock.lock(); defer { lock.unlock() }; return cancelRequested
+    /// Claim a new connect attempt, invalidating any attempt already in flight.
+    /// The old attempt's blocking FFI call is aborted too, so this one doesn't have
+    /// to queue behind it; the core ignores a cancel raised before its own call
+    /// began, so this can't kill the attempt we're starting.
+    private func beginAttempt() -> Int {
+        lock.lock(); attemptGen += 1; let gen = attemptGen; lock.unlock()
+        pcsuite_cancel_connect()   // no-op unless a connect is actually in flight
+        return gen
+    }
+    /// True once this attempt has been cancelled or superseded by a newer one.
+    private func isStale(_ gen: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }; return attemptGen != gen
     }
     private func emitState(_ s: ConnState) { emit { self.onState?(s) } }
     private func emitMirroring(_ on: Bool, _ layer: AVSampleBufferDisplayLayer?) {
