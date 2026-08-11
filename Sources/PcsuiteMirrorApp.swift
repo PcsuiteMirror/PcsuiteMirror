@@ -24,6 +24,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Tell the core which mode we're in before anything can connect — in
         // serverless mode (the default) it then refuses every cloud call.
         applyAccountToCore()
+        // Announce this Mac on the LAN for as long as the app runs: the phone's
+        // "find a computer" search discovers PCs by listening for this beacon,
+        // so without it the phone reports "device not found". Needs the identity
+        // in place first (the beacon carries the openID and device name).
+        applyIdentityToCore()
+        do { try pcsuite_presence_start() } catch { log("presence: \(ffiMessage(error))") }
         // Menu-bar-only app: no Dock icon, no main window at launch.
         NSApp.setActivationPolicy(.accessory)
         Notifier.requestAuth()
