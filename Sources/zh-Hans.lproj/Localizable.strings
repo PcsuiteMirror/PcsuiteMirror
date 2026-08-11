@@ -94,3 +94,28 @@
 /* verify-code notification */
 "Verification code" = "验证码";
 "%@ copied to clipboard" = "%@ 已复制到剪贴板";
+
+/* USB reconnect / cable watch */
+"Waiting for a phone over USB…" = "等待手机通过 USB 接入…";
+"Stop reconnecting" = "停止重连";
+"Stop waiting" = "停止等待";
+"No phone over USB — plug in the cable and allow USB debugging on the phone" = "USB 上没有手机 — 请插好数据线并在手机上允许 USB 调试";
+"adb not found — install Android platform-tools to connect over USB" = "未找到 adb — 请安装 Android platform-tools 后再使用 USB 连接";
+"The phone didn't answer over USB — unlock it, keep the screen on, and try again" = "手机在 USB 上没有响应 — 请解锁手机、保持屏幕常亮后重试";
+
+/* file transfer (拖拽发送 + 手机快传) */
+"Send Files to Phone…" = "发送文件到手机…";
+"Choose files to send to the phone" = "选择要发送到手机的文件";
+"Folders aren't supported yet — drop regular files" = "暂不支持文件夹 — 请拖入普通文件";
+"Sending %lld file(s)…" = "正在发送 %lld 个文件…";
+"Sent → %@" = "已发送 → %@";
+"Send failed: %@" = "发送失败：%@";
+"Send failed" = "发送失败";
+"Receiving %lld file(s)…" = "正在接收 %lld 个文件…";
+"Receiving via EasyShare…" = "正在通过互传接收…";
+"Received %lld file(s) → %@" = "已接收 %lld 个文件 → %@";
+"Files received" = "收到文件";
+"%lld file(s) saved to %@" = "%lld 个文件已保存到 %@";
+"Receive failed: %@" = "接收失败：%@";
+"File transfer failed" = "文件接收失败";
+"Transfer cancelled by phone" = "手机已取消传输";

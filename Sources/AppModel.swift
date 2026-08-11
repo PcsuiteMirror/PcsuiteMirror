@@ -31,9 +31,24 @@ final class AppModel: ObservableObject {
     /// Phone device info (storage capacity, model, OS) for the connected device;
     /// nil when disconnected. Fetched shortly after connect.
     @Published private(set) var deviceInfo: PhoneInfo?
+    /// Light file-transfer status line ("Sending…" / "Sent…" / "Received…"),
+    /// shown in the menu for a few seconds; nil when idle.
+    @Published private(set) var fileTransferNote: String?
 
     // Persisted preferences (default ON).
-    @Published var autoReconnect: Bool { didSet { Store.autoReconnect = autoReconnect } }
+    // Turning it off must also stop a sequence that is already running — including
+    // a USB cable watch, which would otherwise sit there forever, and an attempt
+    // already in flight, whose late failure would otherwise arrive looking like a
+    // connect the user had asked for (and pop a notification for it).
+    @Published var autoReconnect: Bool {
+        didSet {
+            Store.autoReconnect = autoReconnect
+            guard !autoReconnect, reconnectDevice != nil else { return }
+            let showing = mirror.isShowing
+            cancelConnect()
+            mirrorLink = showing ? .lost : .live
+        }
+    }
     // Feature toggles apply to a live session immediately (no reconnect needed);
     // didSet only fires on user changes, never during init.
     @Published var clipboardEnabled: Bool { didSet { Store.clipboardEnabled = clipboardEnabled; applyClipboardLive() } }
@@ -69,6 +84,12 @@ final class AppModel: ObservableObject {
     private var reconnectAttempts = 0
     private let maxReconnectAttempts = 6
     private var reconnectDevice: DeviceRef?
+    /// Consecutive empty USB cable probes in the current wait — only used to slow
+    /// the polling down; the wait itself is unbounded.
+    private var cablePolls = 0
+    /// Why the last attempt of this sequence failed (already user-facing), kept so
+    /// giving up can say so. Cleared whenever the sequence parks or restarts.
+    private var lastReconnectError: String?
 
     /// Set by the mirror window: receives the phone's caret position (mirror
     /// pixel space) or nil when no field is focused. Plain closure (not
@@ -101,7 +122,10 @@ final class AppModel: ObservableObject {
         knownDevices = Store.knownDevices
         wire()
         if autoReconnect, let dev = lastDevice {
-            controller.connect(dev, features: features, reconnect: true)
+            // Same sequence as a mid-session drop rather than a single shot: at
+            // login the phone may not be plugged in yet and Wi-Fi may not be up,
+            // and neither is worth greeting the user with a failure banner.
+            beginReconnect(to: dev, delay: 0)
         }
         if ["1", "2", "3", "4", "5"].contains(ProcessInfo.processInfo.environment["PCSUITE_MIRROR_TEST"]) {
             DispatchQueue.main.async { [weak self] in self?.openMirrorTest() }
@@ -111,8 +135,21 @@ final class AppModel: ObservableObject {
     // MARK: - Derived state for the UI
 
     var isConnected: Bool { if case .connected = state { return true }; return false }
+    /// A connect the *user* asked for is in flight — the menu collapses to just
+    /// "Cancel" while it runs. Auto-reconnect deliberately doesn't count: it is
+    /// background work that can last minutes (or, on a USB cable watch, forever),
+    /// and locking the menu for its duration would strand the user with no way to
+    /// reach the other transports.
     var isBusy: Bool {
-        switch state { case .connecting, .reconnecting: return true; default: return false }
+        if case .connecting = state { return true }; return false
+    }
+    /// An auto-reconnect attempt is in flight.
+    var isReconnecting: Bool {
+        if case .reconnecting = state { return true }; return false
+    }
+    /// Parked on the USB cable watch: no phone plugged in, retrying quietly.
+    var isWaitingForPhone: Bool {
+        if case .waitingForPhone = state { return true }; return false
     }
     var busyDevice: DeviceRef? {
         switch state {
@@ -125,6 +162,7 @@ final class AppModel: ObservableObject {
         case .disconnected: return L("Disconnected")
         case .connecting(let d): return "\(L("Connecting…")) \(d.displayName)"
         case .reconnecting(let d): return "\(L("Reconnecting…")) \(d.displayName)"
+        case .waitingForPhone: return L("Waiting for a phone over USB…")
         case .connected(let d): return "\(L("Connected")) · \(d.displayName)"
         case .failed(let m): return "\(L("Connection failed")): \(m)"
         }
@@ -134,18 +172,21 @@ final class AppModel: ObservableObject {
         case .connected: return "checkmark.circle.fill"
         case .connecting, .reconnecting: return "arrow.triangle.2.circlepath"
         case .failed: return "exclamationmark.triangle.fill"
-        case .disconnected: return "circle.dashed"
+        case .disconnected, .waitingForPhone: return "circle.dashed"
         }
     }
     /// SF Symbol for the menu-bar icon — the only always-visible surface of a
     /// menu-bar agent — so connection state reads at a glance without opening it.
     /// Keeps the phone motif for the two "phone present / absent" states.
+    /// Waiting for a cable shows the same idle icon as "disconnected": nothing is
+    /// plugged in and nothing is happening, so a permanently spinning menu-bar
+    /// glyph would overstate it.
     var menuBarSymbol: String {
         switch state {
         case .connected: return "iphone"
         case .connecting, .reconnecting: return "arrow.triangle.2.circlepath"
         case .failed: return "exclamationmark.triangle.fill"
-        case .disconnected: return "iphone.slash"
+        case .disconnected, .waitingForPhone: return "iphone.slash"
         }
     }
 
@@ -219,6 +260,30 @@ final class AppModel: ObservableObject {
     func cancelConnect() { cancelReconnect(); controller.cancel() }
     func disconnect() { cancelReconnect(); closeMirror(); controller.disconnect() }
 
+    // MARK: - File transfer
+
+    /// Send local files to the phone (dropped onto the mirror window or picked
+    /// from the menu). No-op when disconnected.
+    func pushFiles(_ urls: [URL]) {
+        guard isConnected else { return }
+        noteFileTransfer(String(format: L("Sending %lld file(s)…"), urls.count), sticky: true)
+        controller.pushFiles(urls)
+    }
+
+    /// Show a file-transfer status line; auto-clears after a few seconds unless
+    /// `sticky` (a terminal event replaces a sticky note and re-arms the timer).
+    private var noteGen = 0
+    private func noteFileTransfer(_ text: String, sticky: Bool = false) {
+        noteGen += 1
+        let gen = noteGen
+        fileTransferNote = text
+        guard !sticky else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, self.noteGen == gen else { return }
+            self.fileTransferNote = nil
+        }
+    }
+
     // MARK: - Auto-reconnect on unexpected loss
 
     /// An established session dropped (USB unplug, Wi-Fi loss, phone ended it). If
@@ -229,23 +294,115 @@ final class AppModel: ObservableObject {
             mirrorLink = mirror.isShowing ? .lost : .live
             return
         }
+        beginReconnect(to: device, delay: 0.5)
+    }
+
+    /// Start (or restart) an auto-reconnect sequence toward `device`.
+    private func beginReconnect(to device: DeviceRef, delay: TimeInterval) {
         reconnectGen += 1
         reconnectAttempts = 0
+        cablePolls = 0
+        lastReconnectError = nil
         reconnectDevice = device
         mirrorLink = mirror.isShowing ? .reconnecting : .live
-        scheduleReconnect(gen: reconnectGen, delay: 0.5)
+        scheduleReconnect(gen: reconnectGen, delay: delay)
     }
 
     /// Fire one reconnect attempt after `delay`, unless the sequence was cancelled
     /// or auto-reconnect was turned off in the meantime.
+    ///
+    /// USB goes through the cable probe first. Running a connect against a phone
+    /// that isn't plugged in only produces an adb diagnostic ("no adb device in
+    /// 'device' state — …"), which is developer text for a situation that isn't
+    /// even an error: the user unplugged the cable. So we ask adb cheaply instead,
+    /// and when there's nothing there we simply keep watching — quietly, and
+    /// without spending the retry budget.
     private func scheduleReconnect(gen: Int, delay: TimeInterval) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.reconnectGen == gen, self.autoReconnect,
                   let dev = self.reconnectDevice else { return }
-            self.reconnectAttempts += 1
-            log("auto-reconnect attempt \(self.reconnectAttempts)/\(self.maxReconnectAttempts) → \(dev.displayName)")
-            self.controller.connect(dev, features: self.features, reconnect: true)
+            guard dev.transport == .usb else { self.fireReconnect(gen: gen, device: dev); return }
+            self.controller.probeUSB { [weak self] link in
+                guard let self, self.reconnectGen == gen, self.autoReconnect,
+                      self.reconnectDevice != nil else { return }
+                switch link {
+                case .ready:
+                    self.cablePolls = 0
+                    // A phone *is* on the cable and it still won't connect — that
+                    // is a real failure, unlike a missing cable, so the budget
+                    // applies here and only here.
+                    guard self.reconnectAttempts < self.maxReconnectAttempts else {
+                        self.giveUpReconnect(message: self.lastReconnectError)
+                        return
+                    }
+                    self.fireReconnect(gen: gen, device: dev)
+                case .noDevice, .unauthorized:
+                    self.parkOnCable(gen: gen, device: dev, link: link)
+                case .noAdb:
+                    // No adb binary: USB can never come up, so waiting is pointless.
+                    log("USB: adb is unusable — ending the reconnect wait")
+                    self.giveUpReconnect(message: L("adb not found — install Android platform-tools to connect over USB"))
+                }
+            }
         }
+    }
+
+    private func fireReconnect(gen: Int, device: DeviceRef) {
+        reconnectAttempts += 1
+        log("auto-reconnect attempt \(reconnectAttempts)/\(maxReconnectAttempts) → \(device.displayName)")
+        controller.connect(device, features: features, reconnect: true)
+    }
+
+    /// No phone on the cable (or one that hasn't authorized debugging yet). Show a
+    /// plain "waiting" status, hand the retry budget back — the next cable is a
+    /// fresh start — and look again shortly. Unbounded on purpose: an unplugged
+    /// cable stays unplugged until the user does something about it.
+    private func parkOnCable(gen: Int, device: DeviceRef, link: USBLink) {
+        if cablePolls == 0 {
+            log(link == .unauthorized
+                ? "USB: phone attached but debugging isn't authorized — waiting"
+                : "USB: no phone on the cable — waiting")
+        }
+        cablePolls += 1
+        reconnectAttempts = 0
+        lastReconnectError = nil
+        state = .waitingForPhone(device)
+        // Quick at first so a fast replug is caught immediately, then settle down:
+        // each poll spawns an `adb devices`, and this loop can run for hours.
+        scheduleReconnect(gen: gen, delay: cablePolls < 8 ? 2 : 6)
+    }
+
+    /// End the sequence. `message` (already user-facing) is shown as the failure
+    /// status for a few seconds; nil ends it silently.
+    private func giveUpReconnect(message: String?) {
+        if let message { log("auto-reconnect gave up: \(message)") }
+        let showing = mirror.isShowing
+        cancelReconnect()
+        mirrorLink = showing ? .lost : .live
+        if let message {
+            state = .failed(message)
+            scheduleFailedReset()
+        }
+    }
+
+    /// Turn a raw core failure into something worth showing a person.
+    ///
+    /// The USB path's adb diagnostics are developer text — they name adb states and
+    /// paste `adb devices` output — and they're the failures users hit most, since
+    /// "the cable isn't in" is an everyday situation. Anything else is passed
+    /// through, minus any trailing detail lines: this ends up in a menu label and a
+    /// notification body, neither of which can show a multi-line dump.
+    private func friendlyConnectError(_ raw: String) -> String {
+        if raw.contains("no adb device") {
+            return L("No phone over USB — plug in the cable and allow USB debugging on the phone")
+        }
+        if raw.contains("adb") && (raw.contains("spawn") || raw.contains("No such file")) {
+            return L("adb not found — install Android platform-tools to connect over USB")
+        }
+        if raw.contains("/version never returned") {
+            return L("The phone didn't answer over USB — unlock it, keep the screen on, and try again")
+        }
+        return raw.components(separatedBy: "\n").first ?? raw
     }
 
     // Auto-clears a stuck `.failed` status back to `.disconnected`. Bumped on each
@@ -267,8 +424,13 @@ final class AppModel: ObservableObject {
     private func cancelReconnect() {
         reconnectGen += 1
         reconnectAttempts = 0
+        cablePolls = 0
         reconnectDevice = nil
+        lastReconnectError = nil
         mirrorLink = .live
+        // The cable watch is the one state that would otherwise outlive its
+        // sequence: nothing else will move it off "waiting".
+        if isWaitingForPhone { state = .disconnected }
     }
     /// The current resolution/bitrate/fps/audio choices, resolved for the core.
     var mirrorSettings: MirrorSettings {
@@ -412,7 +574,18 @@ final class AppModel: ObservableObject {
     private func wire() {
         controller.onState = { [weak self] st in
             guard let self else { return }
-            self.state = st
+            var st = st
+            // Sanitize once, up front: nothing below (menu status, notification,
+            // give-up message) should ever see the raw core/adb text.
+            if case .failed(let raw) = st { st = .failed(self.friendlyConnectError(raw)) }
+            // A failure inside a reconnect sequence isn't a UI event — the next
+            // attempt is already scheduled. Holding on "reconnecting" avoids a
+            // flash of the error text and the warning icon between attempts.
+            if case .failed = st, let dev = self.reconnectDevice {
+                self.state = .reconnecting(dev)
+            } else {
+                self.state = st
+            }
             // The QR pairing window only exists while waiting for a scan; dismiss it
             // once we leave that wait (connected / failed / disconnected).
             switch st {
@@ -435,9 +608,10 @@ final class AppModel: ObservableObject {
             case .disconnected:
                 self.deviceInfo = nil
                 self.activeDeviceId = nil
+                self.fileTransferNote = nil
             case .failed(let message):
                 // A reconnect attempt failed: back off and retry, or give up.
-                guard self.reconnectDevice != nil else {
+                guard let dev = self.reconnectDevice else {
                     // User-initiated connect failed. The dropdown may be closed, so
                     // surface the reason as a notification, and don't leave the menu
                     // status stuck on "failed" forever.
@@ -445,15 +619,17 @@ final class AppModel: ObservableObject {
                     self.scheduleFailedReset()
                     break
                 }
-                if self.autoReconnect, self.reconnectAttempts < self.maxReconnectAttempts {
-                    let backoff = min(8.0, pow(2.0, Double(self.reconnectAttempts - 1)))
-                    log("auto-reconnect retry in \(Int(backoff))s")
+                self.lastReconnectError = message
+                let backoff = min(8.0, pow(2.0, Double(max(1, self.reconnectAttempts) - 1)))
+                guard self.autoReconnect else { self.giveUpReconnect(message: message); break }
+                // USB skips the budget check here: whether this failure even counts
+                // depends on the cable, and only the probe in scheduleReconnect
+                // knows that. Everything else gives up once the budget is spent.
+                if dev.transport == .usb || self.reconnectAttempts < self.maxReconnectAttempts {
+                    log("auto-reconnect retry in \(Int(backoff))s (\(message))")
                     self.scheduleReconnect(gen: self.reconnectGen, delay: backoff)
                 } else {
-                    log("auto-reconnect gave up after \(self.reconnectAttempts) attempts")
-                    let showing = self.mirror.isShowing
-                    self.cancelReconnect()
-                    self.mirrorLink = showing ? .lost : .live
+                    self.giveUpReconnect(message: message)
                 }
             default:
                 break
@@ -495,6 +671,38 @@ final class AppModel: ObservableObject {
         }
         controller.onNotification = { app, title, content in
             Notifier.postPhoneNotification(app: app, title: title, body: content)
+        }
+        controller.onPushResult = { [weak self] dir, error in
+            guard let self else { return }
+            if let dir {
+                self.noteFileTransfer(String(format: L("Sent → %@"), dir))
+            } else if let error {
+                self.noteFileTransfer(String(format: L("Send failed: %@"), error))
+                Notifier.postFileSendFailed(error)
+            }
+        }
+        controller.onFileTransfer = { [weak self] type, files, dir, error in
+            guard let self else { return }
+            switch type {
+            case "started":
+                // 互传 (EasyShare) 批次在 10191 connect 帧时 started，文件名未知
+                // （files 为空）；快传批次 files 至少一个。
+                if files.isEmpty {
+                    self.noteFileTransfer(L("Receiving via EasyShare…"), sticky: true)
+                } else {
+                    self.noteFileTransfer(String(format: L("Receiving %lld file(s)…"), files.count), sticky: true)
+                }
+            case "done":
+                self.noteFileTransfer(String(format: L("Received %lld file(s) → %@"), files.count, dir))
+                Notifier.postFilesReceived(count: files.count, dir: dir)
+            case "failed":
+                self.noteFileTransfer(String(format: L("Receive failed: %@"), error))
+                Notifier.postFileReceiveFailed(error)
+            case "cancelled":
+                self.noteFileTransfer(L("Transfer cancelled by phone"))
+            default:
+                break
+            }
         }
         controller.onDeviceInfo = { [weak self] info in
             guard let self else { return }

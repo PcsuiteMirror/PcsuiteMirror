@@ -80,4 +80,47 @@ enum Notifier {
         let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
     }
+
+    /// Announce a phone→PC「快传」batch that landed on disk.
+    static func postFilesReceived(count: Int, dir: String) {
+        let content = UNMutableNotificationContent()
+        content.title = L("Files received")
+        content.body = String(format: L("%lld file(s) saved to %@"), count, dir)
+        content.sound = .default
+        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
+    }
+
+    /// A phone→PC「快传」batch could not be pulled/written.
+    static func postFileReceiveFailed(_ error: String) {
+        let content = UNMutableNotificationContent()
+        content.title = L("File transfer failed")
+        content.body = error
+        content.sound = .default
+        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
+    }
+
+    /// A PC→phone push failed (the drop target may be closed by the time a long
+    /// upload errors out, so the inline status note would go unseen).
+    static func postFileSendFailed(_ error: String) {
+        let content = UNMutableNotificationContent()
+        content.title = L("Send failed")
+        content.body = error
+        content.sound = .default
+        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
+    }
+}
+
+/// NSOpenPanel for picking files to push to the phone (regular files only;
+/// folders are rejected by the core's upload path anyway). Returns [] on cancel.
+func pickFilesToSend() -> [URL] {
+    let panel = NSOpenPanel()
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.allowsMultipleSelection = true
+    panel.message = L("Choose files to send to the phone")
+    NSApp.activate(ignoringOtherApps: true)
+    return panel.runModal() == .OK ? panel.urls : []
 }

@@ -281,6 +281,8 @@ final class MirrorContainerView: NSView {
     private(set) var screenSize: CGSize = .zero
     private(set) var progress: CGFloat = 0
     var onHover: ((Bool) -> Void)?
+    /// Files dropped anywhere on the window (PC→phone push).
+    var onDropFiles: (([URL]) -> Void)?
     private var tracking: NSTrackingArea?
     private var shadowTimer: Timer?   // refreshes the native shadow while the CA grow runs
 
@@ -299,8 +301,39 @@ final class MirrorContainerView: NSView {
         addSubview(video)                      // the picture (centre)
         overlayHost.wantsLayer = true
         addSubview(overlayHost)                // privacy overlay, above the picture
+        registerForDraggedTypes([.fileURL])    // drop files → push to the phone
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    // MARK: File drop (PC→phone push)
+
+    /// Accent border around the frame while a file drag hovers, so the drop
+    /// target reads as armed.
+    private func setDropHighlight(_ on: Bool) {
+        withoutImplicitAnimation {
+            frameLayer.borderWidth = on ? 3 : 0
+            frameLayer.borderColor = on ? NSColor.controlAccentColor.cgColor : nil
+        }
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        setDropHighlight(true)
+        return .copy
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
+    override func draggingExited(_ sender: NSDraggingInfo?) { setDropHighlight(false) }
+    override func draggingEnded(_ sender: NSDraggingInfo) { setDropHighlight(false) }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        setDropHighlight(false)
+        let urls = sender.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []
+        guard !urls.isEmpty else { return false }
+        onDropFiles?(urls)
+        return true
+    }
 
     /// Set the fixed screen size and lay everything out for the current progress.
     func configure(screenSize: CGSize) {
@@ -974,6 +1007,7 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
             guard let self, !self.chromePinned else { return }   // pinned: ignore hover, stay revealed
             self.container?.setProgress(hovering ? 1 : 0, animated: true)
         }
+        container.onDropFiles = { [weak self] urls in self?.model.pushFiles(urls) }
 
         w.contentView = container
         w.isOpaque = false

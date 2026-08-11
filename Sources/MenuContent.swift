@@ -8,6 +8,9 @@ struct MenuContent: View {
 
     var body: some View {
         Text(model.statusText)   // disabled status label
+        if let note = model.fileTransferNote {
+            Text(note)           // transient file-transfer status
+        }
 
         Divider()
         connectionItems
@@ -25,6 +28,16 @@ struct MenuContent: View {
         if model.isBusy {
             Button(L("Cancel")) { model.cancelConnect() }
         } else {
+            // Auto-reconnect (and the USB cable watch it parks on) is background
+            // work, not a modal connect: the rest of the menu stays available —
+            // Wi-Fi is often the way out of a cable that isn't coming back — with
+            // one item to call it off.
+            if model.isReconnecting || model.isWaitingForPhone {
+                Button(model.isWaitingForPhone ? L("Stop waiting") : L("Stop reconnecting")) {
+                    model.cancelConnect()
+                }
+                Divider()
+            }
             // Device-centric: one submenu per remembered phone. The active device
             // exposes mirror/disconnect; the others expose connect options.
             ForEach(model.knownDevices) { dev in
@@ -57,6 +70,7 @@ struct MenuContent: View {
             Button(model.mirroring ? L("Stop mirroring") : L("Start mirroring")) {
                 if model.mirroring { model.closeMirror() } else { model.openMirror() }
             }
+            Button(L("Send Files to Phone…")) { model.pushFiles(pickFilesToSend()) }
             // Where the sound comes out. Switchable live — the picture keeps running.
             Button(model.audioEnabled ? L("Move audio back to phone") : L("Move audio to this Mac")) {
                 model.setAudio(!model.audioEnabled)

@@ -6,8 +6,25 @@ enum ConnState: Equatable {
     case disconnected
     case connecting(DeviceRef)
     case reconnecting(DeviceRef)
+    /// Auto-reconnect is armed for a USB device, but there is no phone on the
+    /// cable yet. Produced by `AppModel`, not the controller: nothing is in
+    /// flight, we're only watching — so it must not read as "connecting".
+    case waitingForPhone(DeviceRef)
     case connected(DeviceRef)
     case failed(String)
+}
+
+/// What the USB cable looks like right now, without connecting to it
+/// (see `SessionController.probeUSB`).
+enum USBLink: String {
+    /// A phone is attached and authorized — a connect can proceed.
+    case ready
+    /// Nothing usable on the cable: the normal resting state after an unplug.
+    case noDevice = "no-device"
+    /// Attached, but USB debugging hasn't been allowed on the phone yet.
+    case unauthorized
+    /// adb itself is missing or broken — USB can't work until that's fixed.
+    case noAdb = "no-adb"
 }
 
 /// Which background features to arm on connect.
@@ -45,6 +62,13 @@ final class SessionController {
     /// A phone notification was forwarded: `(appName, title, content)`. Delivered on
     /// the main queue while connected (if the notify feature is armed).
     var onNotification: ((String, String, String) -> Void)?
+    /// A phone→PC「快传」batch event: `(type, files, dir, error)` where type is
+    /// "started" / "done" / "failed" / "cancelled". Delivered on the main queue
+    /// while connected.
+    var onFileTransfer: ((String, [String], String, String) -> Void)?
+    /// Result of a `pushFiles` call: `(phoneDir, nil)` on success, `(nil, error)`
+    /// on failure. Delivered on the main queue.
+    var onPushResult: ((String?, String?) -> Void)?
     /// Phone device info (storage capacity, model, OS) fetched after connect.
     /// Delivered on the main queue.
     var onDeviceInfo: ((PhoneInfo) -> Void)?
@@ -84,6 +108,7 @@ final class SessionController {
 
     private var verifyDone: DispatchSemaphore?
     private var notifyDone: DispatchSemaphore?
+    private var fileTransDone: DispatchSemaphore?
     private var frameDone: DispatchSemaphore?
     private var privacyDone: DispatchSemaphore?
     private var cursorDone: DispatchSemaphore?
@@ -179,6 +204,20 @@ final class SessionController {
         }
     }
 
+    /// Is a phone on the USB cable? Answers without connecting — and without the
+    /// adb diagnostics a failed connect would produce — so a caller waiting for a
+    /// cable can ask repeatedly and stay quiet about it.
+    ///
+    /// Runs off both the main thread *and* the serial `queue`: a connect parks
+    /// `queue` for its whole duration, and the point of this call is to answer
+    /// while nothing else is going on. Result delivered on the main queue.
+    func probeUSB(_ done: @escaping (USBLink) -> Void) {
+        Thread.detachNewThread {
+            let link = USBLink(rawValue: pcsuite_usb_probe().toString()) ?? .noDevice
+            DispatchQueue.main.async { done(link) }
+        }
+    }
+
     /// Arm the requested features on a freshly-connected session, register it, start
     /// the disconnect watcher, and report `.connected`. Runs on `queue`; the caller
     /// has already passed the post-connect cancel check. Shared by every transport
@@ -196,6 +235,11 @@ final class SessionController {
             s.enable_notify()
             startNotifyLoop(s)
         }
+        // Phone→PC「快传」receiver — always armed (no toggle; it only listens).
+        do {
+            try s.enable_file_transfer(Self.fileSaveDir)
+            startFileTransferLoop(s)
+        } catch { log("file-transfer enable failed: \(ffiMessage(error))") }
         setSession(s)
         connGen += 1
         currentDevice = device
@@ -304,6 +348,11 @@ final class SessionController {
             s.stop_notify()
             done.wait()                 // block until the notify thread exits
             notifyDone = nil
+        }
+        if let s = session, let done = fileTransDone {
+            s.stop_file_transfer()
+            done.wait()                 // block until the file-transfer thread exits
+            fileTransDone = nil
         }
         if let s = session, let done = watchDone {
             s.stop_watch()
@@ -652,6 +701,68 @@ final class SessionController {
             done.signal()
         }
         t.name = "notify-loop"
+        t.start()
+    }
+
+    // MARK: - File transfer (push + phone→PC「快传」receive)
+
+    /// Where phone→PC「快传」files land (the core creates it on demand).
+    static let fileSaveDir = NSHomeDirectory() + "/Downloads/PcsuiteMirror"
+
+    /// Upload local files to the phone (the drag-and-drop path). Runs on a
+    /// detached thread holding a strong session ref — an upload can take minutes
+    /// and must not park the serial `queue` (same pattern as fetchDeviceInfo).
+    /// Regular files only; directories are dropped here because the core rejects
+    /// them (v1). Result reported via `onPushResult` on the main queue.
+    func pushFiles(_ urls: [URL]) {
+        guard let s = snapshotSession() else {
+            log("pushFiles: not connected")
+            emit { self.onPushResult?(nil, "not connected") }
+            return
+        }
+        let files = urls.filter {
+            (try? $0.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+        }
+        guard !files.isEmpty else {
+            log("pushFiles: no regular files in the drop (folders unsupported)")
+            emit { self.onPushResult?(nil, L("Folders aren't supported yet — drop regular files")) }
+            return
+        }
+        Thread.detachNewThread { [weak self] in
+            let vec = RustVec<RustString>()
+            for f in files { vec.push(value: RustString(f.path)) }
+            do {
+                // "" = the phone's default save directory.
+                let dir = try s.push_files(vec, RustString("")).toString()
+                self?.emit { self?.onPushResult?(dir, nil) }
+            } catch {
+                let msg = ffiMessage(error)
+                log("push failed: \(msg)")
+                self?.emit { self?.onPushResult?(nil, msg) }
+            }
+        }
+    }
+
+    private func startFileTransferLoop(_ s: PcSession) {
+        let done = DispatchSemaphore(value: 0)
+        fileTransDone = done
+        let t = Thread { [weak self] in
+            while true {
+                let raw = s.next_file_transfer_event().toString()
+                if raw.isEmpty { break }            // stopped or session ended
+                var type = "", files: [String] = [], dir = "", error = ""
+                if let data = raw.data(using: .utf8),
+                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    type = obj["type"] as? String ?? ""
+                    files = obj["files"] as? [String] ?? []
+                    dir = obj["dir"] as? String ?? ""
+                    error = obj["error"] as? String ?? ""
+                }
+                self?.emit { self?.onFileTransfer?(type, files, dir, error) }
+            }
+            done.signal()
+        }
+        t.name = "filetrans-loop"
         t.start()
     }
 
