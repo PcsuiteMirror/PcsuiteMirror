@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// How we reach the phone.
 enum Transport: String, Codable {
@@ -222,6 +223,38 @@ enum ClipboardDirection: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+/// Where this Mac's identity comes from. Picked once by the user; it decides
+/// whether the app is ever allowed to contact a vendor server.
+enum ConnectionMode: String, CaseIterable, Identifiable, Codable {
+    /// No server, ever: identity is typed in (or learned from the phone), and
+    /// pairing is USB / a LAN IP / the local QR flow. The default.
+    case serverless
+    /// Sign in with a vivo account, which supplies the openID and registers this
+    /// Mac with the vendor's connection center so the phone can list it.
+    case vivoAccount
+
+    var id: String { rawValue }
+
+    /// The spelling the Rust core expects (`config::Mode::parse`).
+    var coreValue: String { self == .vivoAccount ? "vivo_account" : "serverless" }
+
+    var label: String {
+        switch self {
+        case .serverless: return L("Serverless (no account)")
+        case .vivoAccount: return L("vivo account")
+        }
+    }
+
+    var blurb: String {
+        switch self {
+        case .serverless:
+            return L("Nothing leaves your network: connect over USB, a phone IP, or by scanning a QR code on this Mac.")
+        case .vivoAccount:
+            return L("Sign in with your vivo account to register this Mac, so it appears in the phone's connection centre.")
+        }
+    }
+}
+
 /// Thin UserDefaults-backed settings store. Defaults: auto-reconnect, clipboard and
 /// verify-code relay are all ON out of the box (requirements 2 & 4).
 enum Store {
@@ -345,5 +378,78 @@ enum Store {
             return (try? JSONDecoder().decode([SeedEntry].self, from: data)) ?? []
         }
         set { d.set(try? JSONEncoder().encode(newValue), forKey: "seeds") }
+    }
+
+    // MARK: - vivo-account mode
+
+    /// Serverless unless the user explicitly switched — an unset or unreadable
+    /// value must never opt someone into talking to a server.
+    static var connectionMode: ConnectionMode {
+        get { ConnectionMode(rawValue: d.string(forKey: "connectionMode") ?? "") ?? .serverless }
+        set { d.set(newValue.rawValue, forKey: "connectionMode") }
+    }
+    /// Whether this Mac has been registered with the connection centre at least
+    /// once, so the panel can say so without a network round trip.
+    static var vivoRegistered: Bool {
+        get { flag("vivoRegistered", default: false) }
+        set { d.set(newValue, forKey: "vivoRegistered") }
+    }
+}
+
+/// The signed-in vivo account. The **token is a credential**, so it lives in the
+/// keychain rather than UserDefaults; the openID is not secret (the phone sees it
+/// on the wire during every LAN connect) and stays with the other settings.
+enum VivoAccount {
+    private static let service = "tech.xvanturing.vi-conn.vivo-token"
+
+    static var openID: String {
+        get { UserDefaults.standard.string(forKey: "vivoOpenID") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "vivoOpenID") }
+    }
+
+    /// Account token (`<hex>.<millis>`), read from / written to the keychain.
+    static var token: String {
+        get {
+            let q: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne,
+            ]
+            var item: CFTypeRef?
+            guard SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess,
+                  let data = item as? Data else { return "" }
+            return String(data: data, encoding: .utf8) ?? ""
+        }
+        set {
+            let base: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+            ]
+            SecItemDelete(base as CFDictionary)
+            guard !newValue.isEmpty else { return }
+            var add = base
+            add[kSecValueData as String] = Data(newValue.utf8)
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            SecItemAdd(add as CFDictionary, nil)
+        }
+    }
+
+    /// Both halves present. Says nothing about whether the token is still valid —
+    /// only the server can, and it answers 401 when it isn't.
+    static var isSignedIn: Bool { !openID.isEmpty && !token.isEmpty }
+
+    /// Store the credentials the login page handed back.
+    static func save(openID id: String, token t: String) {
+        openID = id
+        token = t
+    }
+
+    /// Forget the account (keeps the mode selection — the user may want to sign
+    /// back in) and clear the registered flag.
+    static func signOut() {
+        openID = ""
+        token = ""
+        Store.vivoRegistered = false
     }
 }

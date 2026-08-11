@@ -7,6 +7,9 @@ import AppKit
 /// openID too even though its *connection* doesn't. Runs on the caller's thread
 /// (the connect queue); the core guards the overrides with a lock.
 func applyIdentityToCore() {
+    // Mode + account first: in vivo-account mode the openID below is the one the
+    // sign-in supplied, and the core must know which mode it's in either way.
+    applyAccountToCore()
     pcsuite_set_identity(Store.openID, Store.pcMac, Store.accountLabel, Store.deviceName)
     pcsuite_set_clip_id(Store.clipPcId)
     for e in Store.seeds {
@@ -100,6 +103,7 @@ struct LanSettingsView: View {
 struct PreferencesView: View {
     @ObservedObject var model: AppModel
     var onIdentity: () -> Void
+    var onAccount: () -> Void
 
     /// `model.resolution` is `private(set)` (changing it may restart the live
     /// stream), so route the picker through `setResolution(_:)`.
@@ -163,6 +167,8 @@ struct PreferencesView: View {
             HStack {
                 Button(L("Identity / account…")) { onIdentity() }
                     .buttonStyle(.link)
+                Button(L("Account & mode…")) { onAccount() }
+                    .buttonStyle(.link)
                 Spacer()
             }
             .padding(12)
@@ -183,9 +189,17 @@ final class PreferencesWindowController {
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let host = NSHostingController(rootView: PreferencesView(model: model, onIdentity: {
-            SettingsWindowController.shared.show()
-        }))
+        let host = NSHostingController(rootView: PreferencesView(
+            model: model,
+            onIdentity: { SettingsWindowController.shared.show() },
+            onAccount: {
+                VivoAccountWindowController.shared.show { ip in
+                    guard !ip.isEmpty else { return }
+                    model.lanIP = ip
+                    model.connectLAN()
+                }
+            }
+        ))
         let w = NSWindow(contentViewController: host)
         w.title = L("Settings")
         w.styleMask = [.titled, .closable]

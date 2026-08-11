@@ -46,6 +46,11 @@ struct MenuContent: View {
             if !model.knownDevices.isEmpty { Divider() }
             // Add / connect a device not in the roster yet.
             Button(L("Pair new device (QR)…")) { model.pairQR() }
+            // In account mode the phones (and their addresses) come from the
+            // account, so offer that panel instead of only a hand-typed IP.
+            if Store.connectionMode == .vivoAccount {
+                Button(L("Devices on my vivo account…")) { showAccountPanel() }
+            }
             Button(L("Connect over USB")) { model.connectUSB() }
             Button(L("Connect over Wi-Fi…")) {
                 if let ip = promptForIP(default: model.lanIP) {
@@ -53,6 +58,16 @@ struct MenuContent: View {
                     if !t.isEmpty { model.lanIP = t; model.connectLAN() }
                 }
             }
+        }
+    }
+
+    /// Open the account panel, wiring its "Connect" buttons to a Wi-Fi connect
+    /// using the address the account reported for that phone.
+    private func showAccountPanel() {
+        VivoAccountWindowController.shared.show { ip in
+            guard !ip.isEmpty else { return }
+            model.lanIP = ip
+            model.connectLAN()
         }
     }
 
