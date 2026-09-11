@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import UserNotifications
+import ServiceManagement
 
 /// Log to stderr so a headless-launched binary still shows progress.
 func log(_ s: String) {
@@ -9,6 +10,20 @@ func log(_ s: String) {
 
 /// Localized string lookup (Localizable.strings, keyed by the English source text).
 func L(_ key: String) -> String { NSLocalizedString(key, comment: "") }
+
+/// Open this app at login, via the system login-item registry (`SMAppService`),
+/// so the setting lives with the OS — it shows in System Settings › General ›
+/// Login Items, and survives our own defaults being reset. Registers the bundle
+/// at its current path, so a Debug build registers the Debug build.
+enum LaunchAtLogin {
+    static var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
+
+    /// The OS can refuse (e.g. the user turned the item off in System Settings,
+    /// which leaves it "requires approval"); the caller re-reads `isEnabled`.
+    static func set(_ on: Bool) throws {
+        if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+    }
+}
 
 /// Extract a human-readable message from a thrown FFI error (a `RustString`).
 func ffiMessage(_ error: Error) -> String {

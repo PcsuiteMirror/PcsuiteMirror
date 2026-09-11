@@ -57,6 +57,17 @@ final class AppModel: ObservableObject {
     @Published var notifyEnabled: Bool { didSet { Store.notifyEnabled = notifyEnabled; if isConnected { controller.setNotify(enabled: notifyEnabled) } } }
     /// Show the FPS / latency HUD over the mirror picture.
     @Published var showStats: Bool { didSet { Store.showStats = showStats } }
+    /// Open at login. Not in the store: the OS holds it (see `LaunchAtLogin`), so
+    /// a change is asked of the OS and the toggle then shows what the OS says.
+    @Published var launchAtLogin: Bool {
+        didSet {
+            guard launchAtLogin != oldValue, launchAtLogin != LaunchAtLogin.isEnabled else { return }
+            do { try LaunchAtLogin.set(launchAtLogin) }
+            catch { log("launch at login: \(error.localizedDescription)") }
+            let actual = LaunchAtLogin.isEnabled
+            if actual != launchAtLogin { launchAtLogin = actual }
+        }
+    }
     @Published var lanIP: String { didSet { Store.lanIP = lanIP } }
     @Published private(set) var resolution: MirrorResolution
     @Published private(set) var bitrate: MirrorBitrate
@@ -128,6 +139,7 @@ final class AppModel: ObservableObject {
         verifyEnabled = Store.verifyEnabled
         notifyEnabled = Store.notifyEnabled
         showStats = Store.showStats
+        launchAtLogin = LaunchAtLogin.isEnabled
         lanIP = Store.lanIP
         resolution = Store.resolution
         bitrate = Store.bitrate
@@ -150,6 +162,15 @@ final class AppModel: ObservableObject {
         }
         if ["1", "2", "3", "4", "5"].contains(ProcessInfo.processInfo.environment["PCSUITE_MIRROR_TEST"]) {
             DispatchQueue.main.async { [weak self] in self?.openMirrorTest() }
+        }
+        // Dev aid: open the settings window at launch (nothing in the menu bar
+        // can be driven from a shell), on the tab named by the value if any.
+        if let want = ProcessInfo.processInfo.environment["PCSUITE_OPEN_SETTINGS"] {
+            let tab = PreferencesTab.allCases.first { "\($0)" == want }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                PreferencesWindowController.shared.show(model: self, tab: tab)
+            }
         }
     }
 
@@ -377,6 +398,7 @@ final class AppModel: ObservableObject {
         verifyEnabled = Store.verifyEnabled
         notifyEnabled = Store.notifyEnabled
         showStats = Store.showStats
+        launchAtLogin = false          // held by the OS, not the store; off is the default
         lanIP = Store.lanIP
         resolution = Store.resolution
         bitrate = Store.bitrate

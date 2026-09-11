@@ -70,6 +70,8 @@
 "Reset" = "重置";
 "Signs out, forgets every phone and the LAN identity, and restores every default." = "退出账号、忘记所有手机和局域网身份，并恢复全部默认值。";
 "General" = "通用";
+"Startup" = "启动";
+"Launch at login" = "登录时自动启动";
 "Mirroring" = "投屏";
 "Picture" = "画面";
 "Audio" = "声音";

@@ -70,6 +70,8 @@
 "Reset" = "Reset";
 "Signs out, forgets every phone and the LAN identity, and restores every default." = "Signs out, forgets every phone and the LAN identity, and restores every default.";
 "General" = "General";
+"Startup" = "Startup";
+"Launch at login" = "Launch at login";
 "Mirroring" = "Mirroring";
 "Identity" = "Identity";
 "Picture" = "Picture";

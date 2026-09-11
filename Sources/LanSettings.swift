@@ -107,21 +107,99 @@ struct IdentityTab: View {
 
 // MARK: - Settings window
 
-enum PreferencesTab: Hashable {
+/// The tabs, in toolbar order. Each carries the SF Symbol and the height its
+/// content wants — the window resizes to the selected tab, Preferences-style.
+enum PreferencesTab: Int, CaseIterable {
     case general, mirroring, identity, account
+
+    var title: String {
+        switch self {
+        case .general: return L("General")
+        case .mirroring: return L("Mirroring")
+        case .identity: return L("Identity")
+        case .account: return L("Account")
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .general: return "gearshape"
+        case .mirroring: return "rectangle.on.rectangle"
+        case .identity: return "person.text.rectangle"
+        case .account: return "person.crop.circle"
+        }
+    }
+    var height: CGFloat {
+        switch self {
+        case .general: return 450
+        case .mirroring: return 470
+        case .identity: return 540
+        case .account: return 580
+        }
+    }
+
+    @ViewBuilder func content(_ model: AppModel) -> some View {
+        switch self {
+        case .general: GeneralTab(model: model)
+        case .mirroring: MirroringTab(model: model)
+        case .identity: IdentityTab()
+        case .account: AccountTab(appModel: model)
+        }
+    }
 }
 
-/// Which tab the settings window shows; the menu can open a specific one.
-final class PreferencesNav: ObservableObject {
-    @Published var tab: PreferencesTab = .general
-}
-
-/// The settings window: one tab per concern. General and Mirroring bind straight
-/// to the shared `AppModel`, so each change persists immediately and the menu
-/// stays in sync — there is no Save step anywhere in here.
-struct PreferencesView: View {
+/// Feature toggles bound straight to the shared `AppModel`, so each change
+/// persists immediately and the menu stays in sync — there is no Save step.
+struct GeneralTab: View {
     @ObservedObject var model: AppModel
-    @ObservedObject var nav: PreferencesNav
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(L("Launch at login"), isOn: $model.launchAtLogin)
+                Toggle(L("Auto-reconnect last device"), isOn: $model.autoReconnect)
+            } header: {
+                Text(L("Startup"))
+            }
+
+            Section {
+                Toggle(L("Clipboard sync"), isOn: $model.clipboardEnabled)
+                Picker(L("Clipboard direction"), selection: $model.clipboardDirection) {
+                    ForEach(ClipboardDirection.allCases) { Text($0.label).tag($0) }
+                }
+                .disabled(!model.clipboardEnabled)
+                Toggle(L("Verify-code relay"), isOn: $model.verifyEnabled)
+                Toggle(L("Notification relay"), isOn: $model.notifyEnabled)
+            } header: {
+                Text(L("Sync"))
+            }
+
+            Section {
+                Button(L("Reset all settings…")) { confirmReset() }
+                    .foregroundStyle(.red)
+            } footer: {
+                Text(L("Signs out, forgets every phone and the LAN identity, and restores every default."))
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// Ask first: this signs the account out and forgets every phone, and
+    /// there is no undo.
+    private func confirmReset() {
+        let alert = NSAlert()
+        alert.messageText = L("Reset all settings?")
+        alert.informativeText = L("This disconnects the phone, signs out of the vivo account, forgets every paired phone and the LAN identity, and puts every option back to its default. The app keeps running.")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L("Reset")).hasDestructiveAction = true
+        alert.addButton(withTitle: L("Cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        model.resetAllSettings()
+    }
+}
+
+/// Picture / audio / diagnostics knobs for the mirror stream.
+struct MirroringTab: View {
+    @ObservedObject var model: AppModel
 
     /// `model.resolution` is `private(set)` (changing it may restart the live
     /// stream), so route the picker through `setResolution(_:)`.
@@ -142,55 +220,6 @@ struct PreferencesView: View {
     }
 
     var body: some View {
-        TabView(selection: $nav.tab) {
-            general
-                .tabItem { Text(L("General")) }
-                .tag(PreferencesTab.general)
-            mirroring
-                .tabItem { Text(L("Mirroring")) }
-                .tag(PreferencesTab.mirroring)
-            IdentityTab()
-                .tabItem { Text(L("Identity")) }
-                .tag(PreferencesTab.identity)
-            AccountTab(appModel: model)
-                .tabItem { Text(L("Account")) }
-                .tag(PreferencesTab.account)
-        }
-        .padding(.top, 8)
-        .frame(width: 520, height: 520)
-    }
-
-    private var general: some View {
-        Form {
-            Section {
-                Toggle(L("Clipboard sync"), isOn: $model.clipboardEnabled)
-                Picker(L("Clipboard direction"), selection: $model.clipboardDirection) {
-                    ForEach(ClipboardDirection.allCases) { Text($0.label).tag($0) }
-                }
-                .disabled(!model.clipboardEnabled)
-                Toggle(L("Verify-code relay"), isOn: $model.verifyEnabled)
-                Toggle(L("Notification relay"), isOn: $model.notifyEnabled)
-            } header: {
-                Text(L("Sync"))
-            }
-
-            Section {
-                Toggle(L("Auto-reconnect last device"), isOn: $model.autoReconnect)
-            } header: {
-                Text(L("Connection"))
-            }
-
-            Section {
-                Button(L("Reset all settings…")) { confirmReset() }
-                    .foregroundStyle(.red)
-            } footer: {
-                Text(L("Signs out, forgets every phone and the LAN identity, and restores every default."))
-            }
-        }
-        .formStyle(.grouped)
-    }
-
-    private var mirroring: some View {
         Form {
             Section {
                 Picker(L("Mirror preset"), selection: preset) {
@@ -225,45 +254,49 @@ struct PreferencesView: View {
         }
         .formStyle(.grouped)
     }
-
-    /// Ask first: this signs the account out and forgets every phone, and
-    /// there is no undo.
-    private func confirmReset() {
-        let alert = NSAlert()
-        alert.messageText = L("Reset all settings?")
-        alert.informativeText = L("This disconnects the phone, signs out of the vivo account, forgets every paired phone and the LAN identity, and puts every option back to its default. The app keeps running.")
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: L("Reset")).hasDestructiveAction = true
-        alert.addButton(withTitle: L("Cancel"))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        model.resetAllSettings()
-    }
 }
 
-/// Hosts `PreferencesView` in a plain window (menu-bar apps have no window by
-/// default). Holds the shared model so the toggles bind to live app state.
+/// The settings window: a Preferences-style toolbar (icon + label per tab) over
+/// one SwiftUI tab each. AppKit's `NSTabViewController` in `.toolbar` style is
+/// what gives that look — SwiftUI's `TabView` on macOS renders text-only
+/// segments — and it resizes the window to each tab's content for free.
 final class PreferencesWindowController {
     static let shared = PreferencesWindowController()
+    private static let width: CGFloat = 520
     private var window: NSWindow?
-    private let nav = PreferencesNav()
+    private var tabs: NSTabViewController?
 
     /// Open the window (or bring it forward) on `tab`; nil keeps the current tab.
     func show(model: AppModel, tab: PreferencesTab? = nil) {
-        if let tab { nav.tab = tab }
-        if let w = window {
-            w.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
+        if window == nil { build(model) }
+        if let tab { tabs?.selectedTabViewItemIndex = tab.rawValue }
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func build(_ model: AppModel) {
+        let tvc = NSTabViewController()
+        tvc.tabStyle = .toolbar
+        // The selected tab's title becomes the window title, as in Preferences.
+        tvc.canPropagateSelectedChildViewControllerTitle = true
+        for tab in PreferencesTab.allCases {
+            let size = NSSize(width: Self.width, height: tab.height)
+            let host = NSHostingController(rootView: tab.content(model).frame(width: size.width, height: size.height))
+            host.title = tab.title
+            host.preferredContentSize = size
+            let item = NSTabViewItem(viewController: host)
+            item.label = tab.title
+            item.image = NSImage(systemSymbolName: tab.symbol, accessibilityDescription: tab.title)
+            tvc.addTabViewItem(item)
         }
-        let host = NSHostingController(rootView: PreferencesView(model: model, nav: nav))
-        let w = NSWindow(contentViewController: host)
+        let w = NSWindow(contentViewController: tvc)
         w.title = L("Settings")
         w.styleMask = [.titled, .closable]
+        w.toolbarStyle = .preference
         w.isReleasedWhenClosed = false
         w.center()
         window = w
-        w.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        tabs = tvc
     }
 
     /// Close and drop the window so the next `show()` builds it afresh — the
@@ -271,6 +304,6 @@ final class PreferencesWindowController {
     func discard() {
         window?.close()
         window = nil
-        nav.tab = .general
+        tabs = nil
     }
 }
