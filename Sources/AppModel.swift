@@ -75,6 +75,19 @@ final class AppModel: ObservableObject {
     /// on connect, confirmed once `/base-info` returns the real id.
     @Published private(set) var activeDeviceId: String?
 
+    // Phones on the vivo account (account mode only). The connection centre
+    // lists every phone signed into the account with the LAN address it last
+    // reported, so the menu can offer them for a one-click Wi-Fi connect.
+    /// Account mode with a signed-in account — the menu shows the section.
+    @Published private(set) var cloudAccountActive = false
+    /// The phones, as of the last refresh. Empty while signed out.
+    @Published private(set) var cloudPhones: [CloudDevice] = []
+    /// Polls the list while the account is active — a phone's address changes
+    /// whenever it roams, and there is no push channel to tell us (yet).
+    private var cloudRefreshTimer: Timer?
+    private var cloudRefreshInFlight = false
+    private let cloudRefreshInterval: TimeInterval = 60
+
     private let controller = SessionController()
     private lazy var mirror = MirrorWindowManager(model: self)
 
@@ -121,6 +134,12 @@ final class AppModel: ObservableObject {
         lastDevice = Store.lastDevice
         knownDevices = Store.knownDevices
         wire()
+        // The account panel owns sign-in / mode; it tells us when either changes
+        // so the phone list starts, stops, or refreshes accordingly.
+        NotificationCenter.default.addObserver(
+            forName: .vivoAccountDidChange, object: nil, queue: .main
+        ) { [weak self] _ in self?.syncCloudPhoneWatch() }
+        syncCloudPhoneWatch()
         if autoReconnect, let dev = lastDevice {
             // Same sequence as a mid-session drop rather than a single shot: at
             // login the phone may not be plugged in yet and Wi-Fi may not be up,
@@ -223,6 +242,64 @@ final class AppModel: ObservableObject {
         controller.connect(DeviceRef(transport: .lan, ip: ip), features: features, reconnect: false)
     }
 
+    // MARK: - Phones on the vivo account
+
+    /// Connect over Wi-Fi to a phone from the account list, at the address it
+    /// last reported to the connection centre.
+    func connectCloud(_ phone: CloudDevice) {
+        guard !phone.ip.isEmpty else { return }
+        cancelReconnect()
+        controller.connect(DeviceRef(transport: .lan, ip: phone.ip, name: phone.name),
+                           features: features, reconnect: false)
+    }
+
+    /// Start, stop, or restart the phone-list poll to match the account state.
+    /// Call whenever the mode or sign-in changes; harmless to call again.
+    private func syncCloudPhoneWatch() {
+        let active = Store.connectionMode == .vivoAccount && VivoAccount.isSignedIn
+        cloudRefreshTimer?.invalidate()
+        cloudRefreshTimer = nil
+        cloudAccountActive = active
+        guard active else {
+            if !cloudPhones.isEmpty { cloudPhones = [] }
+            return
+        }
+        refreshCloudPhones()
+        // Default run-loop mode on purpose: the timer then waits while the menu
+        // is open rather than rebuilding it under the pointer.
+        cloudRefreshTimer = Timer.scheduledTimer(withTimeInterval: cloudRefreshInterval, repeats: true) {
+            [weak self] _ in self?.refreshCloudPhones()
+        }
+    }
+
+    /// Fetch `/device/list` off the main thread and publish the phones — but only
+    /// when something the menu shows (id, name, address) actually changed:
+    /// publishing rebuilds the dropdown, which closes any submenu the pointer is
+    /// in, and `reportTime` alone moves every time the phone checks in.
+    func refreshCloudPhones() {
+        guard cloudAccountActive, !cloudRefreshInFlight else { return }
+        cloudRefreshInFlight = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var phones: [CloudDevice]?
+            do {
+                let raw = try pcsuite_cloud_devices().toString()
+                phones = raw.components(separatedBy: "\n").compactMap(CloudDevice.parse).filter(\.isPhone)
+            } catch {
+                log("account phone list: \(ffiMessage(error))")
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.cloudRefreshInFlight = false
+                guard self.cloudAccountActive, let phones else { return }
+                let key = { (p: CloudDevice) in [p.id, p.name, p.ip] }
+                if phones.map(key) != self.cloudPhones.map(key) {
+                    self.cloudPhones = phones
+                    log("account phone list: \(phones.map { "\($0.name)@\($0.ip)" }.joined(separator: ", "))")
+                }
+            }
+        }
+    }
+
     /// Connect a remembered device over the chosen transport. Wi-Fi uses the
     /// device's last-known IP; USB connects to whatever phone is on the cable.
     func connect(_ device: KnownDevice, method: Transport) {
@@ -278,6 +355,7 @@ final class AppModel: ObservableObject {
         VivoAccount.signOut()
         Store.resetAll()
         applyIdentityToCore()
+        syncCloudPhoneWatch()          // signed out now → stops the poll, clears the list
         // Restart the LAN beacon: it snapshots the identity when it starts.
         do { try pcsuite_presence_start() } catch { log("presence: \(ffiMessage(error))") }
         // Those windows snapshot the store when built; drop them so the next

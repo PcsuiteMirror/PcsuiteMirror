@@ -180,6 +180,7 @@ final class VivoCloudModel: ObservableObject {
         Store.connectionMode = m
         applyAccountToCore()
         if m == .serverless { devices = []; status = "" }
+        NotificationCenter.default.post(name: .vivoAccountDidChange, object: nil)
     }
 
     func beginLogin() {
@@ -203,6 +204,7 @@ final class VivoCloudModel: ObservableObject {
         if !derived.isEmpty && Store.clipPcId != derived { Store.clipPcId = derived }
 
         applyAccountToCore()
+        NotificationCenter.default.post(name: .vivoAccountDidChange, object: nil)
         status = L("Signed in.")
         register()
     }
@@ -214,6 +216,7 @@ final class VivoCloudModel: ObservableObject {
         devices = []
         status = L("Signed out.")
         applyAccountToCore()
+        NotificationCenter.default.post(name: .vivoAccountDidChange, object: nil)
     }
 
     /// Register this Mac so the phone's connection centre lists it.
@@ -269,6 +272,12 @@ final class VivoCloudModel: ObservableObject {
             }
         }
     }
+}
+
+extension Notification.Name {
+    /// Posted by the account panel after the mode or the sign-in state changes,
+    /// so the app model can start or stop the account phone list.
+    static let vivoAccountDidChange = Notification.Name("tech.xvanturing.vi-conn.vivoAccountDidChange")
 }
 
 /// Push the mode + account into the core. Called at launch and whenever either

@@ -126,6 +126,7 @@
 "Addresses come from the account, so a phone can be connected to without typing its IP. The phone starting the session itself is not supported yet." = "Addresses come from the account, so a phone can be connected to without typing its IP. The phone starting the session itself is not supported yet.";
 "Device id" = "Device id";
 "Refresh" = "Refresh";
+"Refresh phone list" = "Refresh phone list";
 "Registering…" = "Registering…";
 "Removing…" = "Removing…";
 "Loading devices…" = "Loading devices…";

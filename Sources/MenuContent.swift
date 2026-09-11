@@ -44,6 +44,21 @@ struct MenuContent: View {
                 Menu(deviceLabel(dev)) { deviceMenu(dev) }
             }
             if !model.knownDevices.isEmpty { Divider() }
+            // Account mode: every phone on the account, one click to connect at
+            // the address it last reported. Flat rows on purpose — the roster
+            // above has the per-device actions; this is the shortcut.
+            if model.cloudAccountActive {
+                Text(L("Phones on this account"))
+                if model.cloudPhones.isEmpty {
+                    Text(L("No phones listed yet."))
+                }
+                ForEach(model.cloudPhones) { phone in
+                    Button(cloudPhoneLabel(phone)) { model.connectCloud(phone) }
+                        .disabled(phone.ip.isEmpty || isActive(phone))
+                }
+                Button(L("Refresh phone list")) { model.refreshCloudPhones() }
+                Divider()
+            }
             // Add / connect a device not in the roster yet.
             Button(L("Pair new device (QR)…")) { model.pairQR() }
             // In account mode the phones (and their addresses) come from the
@@ -74,6 +89,23 @@ struct MenuContent: View {
     /// Roster row label: device name, with a check mark when it's the active one.
     private func deviceLabel(_ dev: KnownDevice) -> String {
         (model.isConnected && dev.id == model.activeDeviceId) ? "✓ \(dev.menuLabel)" : dev.menuLabel
+    }
+
+    /// Account row label: "iQOO 15 · 192.168.31.250", check-marked while connected
+    /// to it; a phone that reported no address says so (and is disabled).
+    private func cloudPhoneLabel(_ phone: CloudDevice) -> String {
+        let name = phone.name.isEmpty ? phone.model : phone.name
+        let addr = phone.ip.isEmpty ? L("no address reported") : phone.ip
+        return (isActive(phone) ? "✓ " : "") + "\(name) · \(addr)"
+    }
+
+    /// Whether the live session is to this account phone. The account list has no
+    /// id in common with the roster, so match on what the connect used: the
+    /// address, or failing that the name.
+    private func isActive(_ phone: CloudDevice) -> Bool {
+        guard model.isConnected, let cur = model.lastDevice, cur.transport == .lan else { return false }
+        if let ip = cur.ip, !ip.isEmpty { return ip == phone.ip }
+        return !phone.name.isEmpty && cur.name == phone.name
     }
 
     /// The expanded actions for one remembered device.
