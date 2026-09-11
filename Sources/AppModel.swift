@@ -352,7 +352,17 @@ final class AppModel: ObservableObject {
     /// to the account phone while signed in + `holdPresence`, drop it otherwise,
     /// and restart it when the phone's IP changes.
     private func syncPresenceHold() {
-        let wanted = cloudAccountActive && holdPresence
+        // Presence and a live session both do a 10191 ConnectFlow to the phone,
+        // which only accepts one connection per PC — so they fight (the phone
+        // closes one, control WS to 10380 gets refused). Hold presence ONLY while
+        // idle; a real connect takes over, and disconnecting resumes presence.
+        let sessionActive: Bool = {
+            switch state {
+            case .disconnected, .failed: return false
+            default: return true
+            }
+        }()
+        let wanted = cloudAccountActive && holdPresence && !sessionActive
         let ip = cloudPhones.first(where: { !$0.ip.isEmpty })?.ip ?? ""
         guard wanted, !ip.isEmpty else {
             if cloudPresence != nil { stopPresenceHold() }
@@ -386,9 +396,15 @@ final class AppModel: ObservableObject {
     /// session to it (no mirror). No-op if a session is already up.
     private func handlePhoneConnectRequest() {
         guard !isConnected, !presencePhoneIP.isEmpty else { return }
-        log("presence: 手机请求连接 → 建立会话 \(presencePhoneIP)")
-        let name = cloudPhones.first(where: { $0.ip == presencePhoneIP })?.name ?? L("Phone")
-        controller.connect(DeviceRef(transport: .lan, ip: presencePhoneIP, name: name),
+        let ip = presencePhoneIP
+        log("presence: 手机请求连接 → 建立会话 \(ip)")
+        let name = cloudPhones.first(where: { $0.ip == ip })?.name ?? L("Phone")
+        // Stop holding presence first: presence + a live connect both open a 10191
+        // ConnectFlow and the phone allows only one, so they'd knock each other's
+        // 10380 session out. The connect takes over; disconnecting resumes presence.
+        stopPresenceHold()
+        cancelReconnect()   // drop any stale auto-reconnect (e.g. to an old-network IP)
+        controller.connect(DeviceRef(transport: .lan, ip: ip, name: name),
                            features: features, reconnect: false)
     }
 
@@ -578,8 +594,19 @@ final class AppModel: ObservableObject {
 
     private func fireReconnect(gen: Int, device: DeviceRef) {
         reconnectAttempts += 1
-        log("auto-reconnect attempt \(reconnectAttempts)/\(maxReconnectAttempts) → \(device.displayName)")
-        controller.connect(device, features: features, reconnect: true)
+        var dev = device
+        // In account mode the remembered LAN IP goes stale when the phone roams to
+        // another network. Prefer the current address the account device list
+        // reports for the same phone before dialing the old one.
+        if dev.transport == .lan, cloudAccountActive, let name = device.name,
+           let cur = cloudPhones.first(where: { $0.name == name && !$0.ip.isEmpty }),
+           cur.ip != device.ip {
+            log("auto-reconnect: 设备列表新地址 \(cur.ip)(旧 \(device.ip ?? "?"))")
+            dev = DeviceRef(transport: .lan, ip: cur.ip, name: name)
+            reconnectDevice = dev   // keep dialing the fresh IP on later attempts
+        }
+        log("auto-reconnect attempt \(reconnectAttempts)/\(maxReconnectAttempts) → \(dev.displayName)")
+        controller.connect(dev, features: features, reconnect: true)
     }
 
     /// No phone on the cable (or one that hasn't authorized debugging yet). Show a
@@ -833,6 +860,7 @@ final class AppModel: ObservableObject {
             }
             switch st {
             case .connected(let d):
+                self.syncPresenceHold()   // live session owns the link → drop presence
                 self.lastDevice = d
                 Store.lastDevice = d
                 // Highlight the matching roster entry right away; `/base-info` will
@@ -848,6 +876,7 @@ final class AppModel: ObservableObject {
                 self.deviceInfo = nil
                 self.activeDeviceId = nil
                 self.fileTransferNote = nil
+                self.syncPresenceHold()   // idle again → resume presence (可连)
             case .failed(let message):
                 // A reconnect attempt failed: back off and retry, or give up.
                 guard let dev = self.reconnectDevice else {
