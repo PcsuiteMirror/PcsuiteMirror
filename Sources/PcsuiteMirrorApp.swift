@@ -6,6 +6,10 @@ struct PcsuiteMirrorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
 
+    /// First thing to run: the model below logs as it comes up, and so does the
+    /// delegate, so the log has to have somewhere to go before either exists.
+    init() { LogFile.captureStderrIfDiscarded() }
+
     var body: some Scene {
         // Standard menu-bar dropdown (native NSMenu): the content is built from
         // Button / Toggle / Menu / Divider items. The icon reflects connection

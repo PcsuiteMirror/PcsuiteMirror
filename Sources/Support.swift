@@ -8,6 +8,38 @@ func log(_ s: String) {
     FileHandle.standardError.write(Data(("[mirror] " + s + "\n").utf8))
 }
 
+/// Where the log goes when nothing is reading stderr. An app opened from Finder,
+/// `open`, or a login item has fd 2 on /dev/null, so everything `log()` and the
+/// core's tracing write would vanish — and a phone-side event that happened an
+/// hour ago is exactly what one wants to read back. So at launch, if stderr is
+/// /dev/null, point it at a file. A terminal, pipe or file already there is left
+/// alone (someone is reading it).
+enum LogFile {
+    static let url = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/PcsuiteMirror/app.log")
+    /// Rotate once at launch when the file has grown past this (one older copy kept).
+    private static let rotateAt: UInt64 = 5 << 20
+
+    static func captureStderrIfDiscarded() {
+        var cur = stat(), null = stat()
+        guard fstat(2, &cur) == 0, stat("/dev/null", &null) == 0,
+              cur.st_dev == null.st_dev, cur.st_ino == null.st_ino else { return }
+        let fm = FileManager.default
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let size = (try? fm.attributesOfItem(atPath: url.path)[.size]) as? UInt64, size > rotateAt {
+            let old = url.appendingPathExtension("1")
+            try? fm.removeItem(at: old)
+            try? fm.moveItem(at: url, to: old)
+        }
+        let fd = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        guard fd >= 0 else { return }
+        dup2(fd, 2)
+        close(fd)
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        log("──── launched \(version) pid \(getpid()) \(Date()) ────")
+    }
+}
+
 /// Localized string lookup (Localizable.strings, keyed by the English source text).
 func L(_ key: String) -> String { NSLocalizedString(key, comment: "") }
 
