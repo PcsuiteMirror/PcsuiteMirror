@@ -376,7 +376,20 @@ final class AppModel: ObservableObject {
             guard let self, let p = self.cloudPresence else { return }
             let s = p.status().toString()
             if s != self.presenceStatus { self.presenceStatus = s }
+            // The phone tapped 「连接」 → establish the session (connect only; the
+            // mirror window stays user-initiated, matching the phone's semantics).
+            if p.take_connect_request() { self.handlePhoneConnectRequest() }
         }
+    }
+
+    /// React to the phone tapping 「连接」 while we hold presence: open the control
+    /// session to it (no mirror). No-op if a session is already up.
+    private func handlePhoneConnectRequest() {
+        guard !isConnected, !presencePhoneIP.isEmpty else { return }
+        log("presence: 手机请求连接 → 建立会话 \(presencePhoneIP)")
+        let name = cloudPhones.first(where: { $0.ip == presencePhoneIP })?.name ?? L("Phone")
+        controller.connect(DeviceRef(transport: .lan, ip: presencePhoneIP, name: name),
+                           features: features, reconnect: false)
     }
 
     private func stopPresenceHold() {
