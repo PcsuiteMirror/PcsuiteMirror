@@ -68,20 +68,19 @@ struct MenuContent: View {
                 Button(L("Refresh phone list")) { model.refreshCloudPhones() }
                 Divider()
             }
-            // Add / connect a device not in the roster yet.
-            Button(L("Pair new device (QR)…")) { model.pairQR() }
-            // In account mode the phones (and their addresses) come from the
-            // account, so offer that panel instead of only a hand-typed IP.
-            if Store.connectionMode == .vivoAccount {
-                Button(L("Devices on my vivo account…")) {
-                    PreferencesWindowController.shared.show(model: model, tab: .account)
-                }
-            }
-            Button(L("Connect over USB")) { model.connectUSB() }
-            Button(L("Connect over Wi-Fi…")) {
-                if let ip = promptForIP(default: model.lanIP) {
-                    let t = ip.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !t.isEmpty { model.lanIP = t; model.connectLAN() }
+            // The manual ways in (QR / cable / typed IP), for a phone not in the
+            // roster yet. Serverless mode only: in account mode the phones and
+            // their addresses come from the account list above.
+            if model.serverlessMode {
+                Menu(L("New Connect")) {
+                    Button(L("Pair new device (QR)…")) { model.pairQR() }
+                    Button(L("Connect over USB")) { model.connectUSB() }
+                    Button(L("Connect over Wi-Fi…")) {
+                        if let ip = promptForIP(default: model.lanIP) {
+                            let t = ip.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !t.isEmpty { model.lanIP = t; model.connectLAN() }
+                        }
+                    }
                 }
             }
         }

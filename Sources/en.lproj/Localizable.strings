@@ -14,6 +14,7 @@
 "Connect over USB" = "Connect over USB";
 "Connect over Wi-Fi…" = "Connect over Wi-Fi…";
 "Connect over Wi-Fi" = "Connect over Wi-Fi";
+"New Connect" = "New Connect";
 "Pair new device (QR)…" = "Pair new device (QR)…";
 "Forget this device" = "Forget this device";
 "Enter the phone's IP address" = "Enter the phone's IP address";
@@ -114,7 +115,6 @@
 "Mode" = "Mode";
 "Account & mode" = "Account & mode";
 "Account & mode…" = "Account & mode…";
-"Devices on my vivo account…" = "Devices on my vivo account…";
 "Account" = "Account";
 "This Mac" = "This Mac";
 "Registered" = "Registered";

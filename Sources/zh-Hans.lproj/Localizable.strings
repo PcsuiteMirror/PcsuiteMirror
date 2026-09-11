@@ -14,6 +14,7 @@
 "Connect over USB" = "通过 USB 连接";
 "Connect over Wi-Fi…" = "无线连接…";
 "Connect over Wi-Fi" = "无线连接";
+"New Connect" = "新建连接";
 "Pair new device (QR)…" = "扫码配对新设备…";
 "Forget this device" = "忘记此设备";
 "Enter the phone's IP address" = "输入手机的 IP 地址";
@@ -140,7 +141,6 @@
 "Mode" = "模式";
 "Account & mode" = "账号与模式";
 "Account & mode…" = "账号与模式…";
-"Devices on my vivo account…" = "我账号下的设备…";
 "Account" = "账号";
 "This Mac" = "本机";
 "Registered" = "已注册";

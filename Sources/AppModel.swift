@@ -80,6 +80,8 @@ final class AppModel: ObservableObject {
     // reported, so the menu can offer them for a one-click Wi-Fi connect.
     /// Account mode with a signed-in account — the menu shows the section.
     @Published private(set) var cloudAccountActive = false
+    /// Serverless mode — the menu offers the manual ways in (QR / USB / typed IP).
+    @Published private(set) var serverlessMode = Store.connectionMode == .serverless
     /// The phones, as of the last refresh. Empty while signed out.
     @Published private(set) var cloudPhones: [CloudDevice] = []
     /// Polls the list while the account is active — a phone's address changes
@@ -259,6 +261,7 @@ final class AppModel: ObservableObject {
         let active = Store.connectionMode == .vivoAccount && VivoAccount.isSignedIn
         cloudRefreshTimer?.invalidate()
         cloudRefreshTimer = nil
+        serverlessMode = Store.connectionMode == .serverless
         cloudAccountActive = active
         guard active else {
             if !cloudPhones.isEmpty { cloudPhones = [] }
