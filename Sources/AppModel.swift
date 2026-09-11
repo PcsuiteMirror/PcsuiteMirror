@@ -282,6 +282,10 @@ final class AppModel: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             var phones: [CloudDevice]?
             do {
+                // At launch this can run before the app delegate has handed the
+                // core its mode + account (the model is built when the scene is);
+                // the core refuses cloud calls until then. Cheap, so do it here.
+                applyAccountToCore()
                 let raw = try pcsuite_cloud_devices().toString()
                 phones = raw.components(separatedBy: "\n").compactMap(CloudDevice.parse).filter(\.isPhone)
             } catch {
@@ -358,10 +362,9 @@ final class AppModel: ObservableObject {
         syncCloudPhoneWatch()          // signed out now → stops the poll, clears the list
         // Restart the LAN beacon: it snapshots the identity when it starts.
         do { try pcsuite_presence_start() } catch { log("presence: \(ffiMessage(error))") }
-        // Those windows snapshot the store when built; drop them so the next
-        // open reads the fresh values.
-        SettingsWindowController.shared.discard()
-        VivoAccountWindowController.shared.discard()
+        // The settings window's Identity / Account tabs snapshot the store when
+        // built; drop the window so the next open reads the fresh values.
+        PreferencesWindowController.shared.discard()
         QRPairingWindowController.shared.close()
         // Re-read every published value. Each didSet writes the default back
         // to the store, which is fine, and none applies live — nothing is connected.

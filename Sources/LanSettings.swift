@@ -19,91 +19,109 @@ func applyIdentityToCore() {
     }
 }
 
-/// Settings panel for the LAN pairing identity. USB needs none of this; only the
-/// Wi-Fi path presents an account `openID` (+ optional per-phone seed) to the phone.
-struct LanSettingsView: View {
-    var onDone: () -> Void
+// MARK: - Identity tab
 
-    @State private var openID = Store.openID
-    @State private var deviceName = Store.deviceName
-    @State private var pcMac = Store.pcMac
-    @State private var account = Store.accountLabel
-    @State private var clipPcId = Store.clipPcId
-    @State private var useRemote = Store.lanUseRemote
-    @State private var seeds = Store.seeds
+/// The LAN pairing identity as one editable value, so the tab can load it in one
+/// go and write it back on any change — a tab has no Done button to save on.
+private struct IdentityDraft: Equatable {
+    var openID = ""
+    var clipPcId = ""
+    var deviceName = ""
+    var pcMac = ""
+    var account = ""
+    var useRemote = true
+    var seeds: [SeedEntry] = []
 
-    var body: some View {
-        VStack(spacing: 0) {
-            Form {
-                Section {
-                    TextField(L("Account openID"), text: $openID)
-                    TextField(L("Clipboard PC id"), text: $clipPcId)
-                    TextField(L("Device name"), text: $deviceName)
-                    TextField(L("PC MAC (optional)"), text: $pcMac)
-                    TextField(L("Account label (optional)"), text: $account)
-                } header: {
-                    Text(L("Account identity"))
-                } footer: {
-                    Text(L("openID is per vivo-account (same for every phone on it), required for Wi-Fi connect AND clipboard (incl. USB — shared clipboard is account-scoped). Clipboard PC id must match the id the phone registered for this Mac at pairing, or phone→Mac clipboard won't sync. Mac/name aren't validated."))
-                }
-
-                Section {
-                    Toggle(L("Connect without a seed (connectType=1)"), isOn: $useRemote)
-                } footer: {
-                    Text(L("Recommended for a new device — needs only the openID. Turn off to use the per-phone seed below (connectType=2)."))
-                }
-
-                Section {
-                    ForEach($seeds) { $e in
-                        HStack {
-                            TextField("192.168.x.x", text: $e.ip).frame(width: 130)
-                            TextField(L("seed UUID"), text: $e.seed)
-                            Button {
-                                seeds.removeAll { $0.id == e.id }
-                            } label: { Image(systemName: "minus.circle") }
-                                .buttonStyle(.borderless)
-                        }
-                    }
-                    Button {
-                        seeds.append(SeedEntry(ip: "", seed: ""))
-                    } label: { Label(L("Add phone seed"), systemImage: "plus") }
-                } header: {
-                    Text(L("Per-phone seeds (connectType=2)"))
-                }
-            }
-            .formStyle(.grouped)
-
-            Divider()
-            HStack {
-                Spacer()
-                Button(L("Done")) { save(); onDone() }
-                    .keyboardShortcut(.defaultAction)
-            }
-            .padding(12)
-        }
-        .frame(width: 480, height: 440)
+    static func load() -> IdentityDraft {
+        IdentityDraft(openID: Store.openID, clipPcId: Store.clipPcId,
+                      deviceName: Store.deviceName, pcMac: Store.pcMac,
+                      account: Store.accountLabel, useRemote: Store.lanUseRemote,
+                      seeds: Store.seeds)
     }
 
-    private func save() {
-        Store.openID = openID.trimmingCharacters(in: .whitespacesAndNewlines)
-        Store.clipPcId = clipPcId.trimmingCharacters(in: .whitespacesAndNewlines)
-        Store.deviceName = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
-        Store.pcMac = pcMac.trimmingCharacters(in: .whitespacesAndNewlines)
-        Store.accountLabel = account.trimmingCharacters(in: .whitespacesAndNewlines)
+    func save() {
+        let trim = { (s: String) in s.trimmingCharacters(in: .whitespacesAndNewlines) }
+        Store.openID = trim(openID)
+        Store.clipPcId = trim(clipPcId)
+        Store.deviceName = trim(deviceName)
+        Store.pcMac = trim(pcMac)
+        Store.accountLabel = trim(account)
         Store.lanUseRemote = useRemote
-        Store.seeds = seeds.filter { !$0.ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        // A row still being typed keeps its place in the draft; only rows with an
+        // address are worth persisting.
+        Store.seeds = seeds.filter { !trim($0.ip).isEmpty }
     }
 }
 
-/// Consolidated settings window: the feature toggles and pickers that used to live
-/// in the menu-bar dropdown (most are set once and rarely touched). Bound directly
-/// to the shared `AppModel`, so each change persists immediately and the menu stays
-/// in sync — there is no Save step. The account identity (rarely needed now that the
-/// openID self-fills on connect) is tucked behind the "Identity / account…" link.
+/// The LAN pairing identity. USB needs none of this; only the Wi-Fi path presents
+/// an account `openID` (+ optional per-phone seed) to the phone. Edits persist as
+/// they're made and reach the core at the next connect (`applyIdentityToCore`).
+struct IdentityTab: View {
+    @State private var draft = IdentityDraft.load()
+
+    var body: some View {
+        Form {
+            Section {
+                TextField(L("Account openID"), text: $draft.openID)
+                TextField(L("Clipboard PC id"), text: $draft.clipPcId)
+                TextField(L("Device name"), text: $draft.deviceName)
+                TextField(L("PC MAC (optional)"), text: $draft.pcMac)
+                TextField(L("Account label (optional)"), text: $draft.account)
+            } header: {
+                Text(L("Account identity"))
+            } footer: {
+                Text(L("openID is per vivo-account (same for every phone on it), required for Wi-Fi connect AND clipboard (incl. USB — shared clipboard is account-scoped). Clipboard PC id must match the id the phone registered for this Mac at pairing, or phone→Mac clipboard won't sync. Mac/name aren't validated."))
+            }
+
+            Section {
+                Toggle(L("Connect without a seed (connectType=1)"), isOn: $draft.useRemote)
+            } footer: {
+                Text(L("Recommended for a new device — needs only the openID. Turn off to use the per-phone seed below (connectType=2)."))
+            }
+
+            Section {
+                ForEach($draft.seeds) { $e in
+                    HStack {
+                        TextField("192.168.x.x", text: $e.ip).frame(width: 130)
+                        TextField(L("seed UUID"), text: $e.seed)
+                        Button {
+                            draft.seeds.removeAll { $0.id == e.id }
+                        } label: { Image(systemName: "minus.circle") }
+                            .buttonStyle(.borderless)
+                    }
+                }
+                Button {
+                    draft.seeds.append(SeedEntry(ip: "", seed: ""))
+                } label: { Label(L("Add phone seed"), systemImage: "plus") }
+            } header: {
+                Text(L("Per-phone seeds (connectType=2)"))
+            }
+        }
+        .formStyle(.grouped)
+        // Sign-in fills the openID / clipboard id behind this tab's back; re-read
+        // whenever the tab comes into view so it never shows stale values.
+        .onAppear { draft = .load() }
+        .onChange(of: draft) { $0.save() }
+    }
+}
+
+// MARK: - Settings window
+
+enum PreferencesTab: Hashable {
+    case general, mirroring, identity, account
+}
+
+/// Which tab the settings window shows; the menu can open a specific one.
+final class PreferencesNav: ObservableObject {
+    @Published var tab: PreferencesTab = .general
+}
+
+/// The settings window: one tab per concern. General and Mirroring bind straight
+/// to the shared `AppModel`, so each change persists immediately and the menu
+/// stays in sync — there is no Save step anywhere in here.
 struct PreferencesView: View {
     @ObservedObject var model: AppModel
-    var onIdentity: () -> Void
-    var onAccount: () -> Void
+    @ObservedObject var nav: PreferencesNav
 
     /// `model.resolution` is `private(set)` (changing it may restart the live
     /// stream), so route the picker through `setResolution(_:)`.
@@ -124,59 +142,88 @@ struct PreferencesView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Form {
-                Section {
-                    Toggle(L("Clipboard sync"), isOn: $model.clipboardEnabled)
-                    Picker(L("Clipboard direction"), selection: $model.clipboardDirection) {
-                        ForEach(ClipboardDirection.allCases) { Text($0.label).tag($0) }
-                    }
-                    .disabled(!model.clipboardEnabled)
-                    Toggle(L("Verify-code relay"), isOn: $model.verifyEnabled)
-                    Toggle(L("Notification relay"), isOn: $model.notifyEnabled)
-                } header: {
-                    Text(L("Sync"))
-                }
-
-                Section {
-                    Toggle(L("Auto-reconnect last device"), isOn: $model.autoReconnect)
-                    Picker(L("Mirror preset"), selection: preset) {
-                        ForEach(MirrorPreset.allCases) { Text($0.label).tag($0) }
-                    }
-                    Picker(L("Mirror resolution"), selection: resolution) {
-                        ForEach(MirrorResolution.allCases) { Text($0.label).tag($0) }
-                    }
-                    Picker(L("Mirror bitrate"), selection: bitrate) {
-                        ForEach(MirrorBitrate.allCases) { Text($0.label).tag($0) }
-                    }
-                    Picker(L("Mirror frame rate"), selection: frameRate) {
-                        ForEach(MirrorFrameRate.allCases) { Text($0.label).tag($0) }
-                    }
-                    Toggle(L("Play phone audio on this Mac"), isOn: audio)
-                    Text(L("The phone mutes its own speaker while streaming audio."))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Toggle(L("Show FPS & latency"), isOn: $model.showStats)
-                } header: {
-                    Text(L("Connection"))
-                }
-            }
-            .formStyle(.grouped)
-
-            Divider()
-            HStack {
-                Button(L("Identity / account…")) { onIdentity() }
-                    .buttonStyle(.link)
-                Button(L("Account & mode…")) { onAccount() }
-                    .buttonStyle(.link)
-                Spacer()
-                Button(L("Reset all settings…")) { confirmReset() }
-                    .buttonStyle(.link)
-                    .foregroundStyle(.red)
-            }
-            .padding(12)
+        TabView(selection: $nav.tab) {
+            general
+                .tabItem { Text(L("General")) }
+                .tag(PreferencesTab.general)
+            mirroring
+                .tabItem { Text(L("Mirroring")) }
+                .tag(PreferencesTab.mirroring)
+            IdentityTab()
+                .tabItem { Text(L("Identity")) }
+                .tag(PreferencesTab.identity)
+            AccountTab(appModel: model)
+                .tabItem { Text(L("Account")) }
+                .tag(PreferencesTab.account)
         }
-        .frame(width: 440, height: 360)
+        .padding(.top, 8)
+        .frame(width: 520, height: 520)
+    }
+
+    private var general: some View {
+        Form {
+            Section {
+                Toggle(L("Clipboard sync"), isOn: $model.clipboardEnabled)
+                Picker(L("Clipboard direction"), selection: $model.clipboardDirection) {
+                    ForEach(ClipboardDirection.allCases) { Text($0.label).tag($0) }
+                }
+                .disabled(!model.clipboardEnabled)
+                Toggle(L("Verify-code relay"), isOn: $model.verifyEnabled)
+                Toggle(L("Notification relay"), isOn: $model.notifyEnabled)
+            } header: {
+                Text(L("Sync"))
+            }
+
+            Section {
+                Toggle(L("Auto-reconnect last device"), isOn: $model.autoReconnect)
+            } header: {
+                Text(L("Connection"))
+            }
+
+            Section {
+                Button(L("Reset all settings…")) { confirmReset() }
+                    .foregroundStyle(.red)
+            } footer: {
+                Text(L("Signs out, forgets every phone and the LAN identity, and restores every default."))
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var mirroring: some View {
+        Form {
+            Section {
+                Picker(L("Mirror preset"), selection: preset) {
+                    ForEach(MirrorPreset.allCases) { Text($0.label).tag($0) }
+                }
+                Picker(L("Mirror resolution"), selection: resolution) {
+                    ForEach(MirrorResolution.allCases) { Text($0.label).tag($0) }
+                }
+                Picker(L("Mirror bitrate"), selection: bitrate) {
+                    ForEach(MirrorBitrate.allCases) { Text($0.label).tag($0) }
+                }
+                Picker(L("Mirror frame rate"), selection: frameRate) {
+                    ForEach(MirrorFrameRate.allCases) { Text($0.label).tag($0) }
+                }
+            } header: {
+                Text(L("Picture"))
+            }
+
+            Section {
+                Toggle(L("Play phone audio on this Mac"), isOn: audio)
+            } header: {
+                Text(L("Audio"))
+            } footer: {
+                Text(L("The phone mutes its own speaker while streaming audio."))
+            }
+
+            Section {
+                Toggle(L("Show FPS & latency"), isOn: $model.showStats)
+            } header: {
+                Text(L("Diagnostics"))
+            }
+        }
+        .formStyle(.grouped)
     }
 
     /// Ask first: this signs the account out and forgets every phone, and
@@ -198,24 +245,17 @@ struct PreferencesView: View {
 final class PreferencesWindowController {
     static let shared = PreferencesWindowController()
     private var window: NSWindow?
+    private let nav = PreferencesNav()
 
-    func show(model: AppModel) {
+    /// Open the window (or bring it forward) on `tab`; nil keeps the current tab.
+    func show(model: AppModel, tab: PreferencesTab? = nil) {
+        if let tab { nav.tab = tab }
         if let w = window {
             w.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let host = NSHostingController(rootView: PreferencesView(
-            model: model,
-            onIdentity: { SettingsWindowController.shared.show() },
-            onAccount: {
-                VivoAccountWindowController.shared.show { ip in
-                    guard !ip.isEmpty else { return }
-                    model.lanIP = ip
-                    model.connectLAN()
-                }
-            }
-        ))
+        let host = NSHostingController(rootView: PreferencesView(model: model, nav: nav))
         let w = NSWindow(contentViewController: host)
         w.title = L("Settings")
         w.styleMask = [.titled, .closable]
@@ -225,37 +265,12 @@ final class PreferencesWindowController {
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
-}
 
-/// Hosts `LanSettingsView` in a plain window. A menu-bar (`.accessory`) app has no
-/// window by default, so we create one on demand and bring it to the front.
-final class SettingsWindowController {
-    static let shared = SettingsWindowController()
-    private var window: NSWindow?
-
-    func show() {
-        if let w = window {
-            w.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-        let host = NSHostingController(rootView: LanSettingsView(onDone: { [weak self] in
-            self?.window?.close()
-        }))
-        let w = NSWindow(contentViewController: host)
-        w.title = L("Identity")
-        w.styleMask = [.titled, .closable]
-        w.isReleasedWhenClosed = false
-        w.center()
-        window = w
-        w.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    /// Close and drop the window so the next `show()` builds it afresh — its
-    /// fields snapshot the store when created.
+    /// Close and drop the window so the next `show()` builds it afresh — the
+    /// Identity and Account tabs snapshot the store when created.
     func discard() {
         window?.close()
         window = nil
+        nav.tab = .general
     }
 }

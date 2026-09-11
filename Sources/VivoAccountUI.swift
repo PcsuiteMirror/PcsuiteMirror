@@ -157,14 +157,14 @@ struct CloudDevice: Identifiable, Equatable {
     }
 }
 
-/// Drives the account panel: sign-in state, registration, and the device roster.
-/// Every FFI call here blocks on the network, so it runs on a background queue.
+/// Drives the account tab: sign-in state and registration. The phone list lives
+/// on `AppModel` (it polls it for the menu). Every FFI call here blocks on the
+/// network, so it runs on a background queue.
 @MainActor
 final class VivoCloudModel: ObservableObject {
     @Published var mode: ConnectionMode = Store.connectionMode
     @Published var signedIn: Bool = VivoAccount.isSignedIn
     @Published var registered: Bool = Store.vivoRegistered
-    @Published var devices: [CloudDevice] = []
     @Published var busy = false
     @Published var status: String = ""
     @Published var showingLogin = false
@@ -179,7 +179,7 @@ final class VivoCloudModel: ObservableObject {
         mode = m
         Store.connectionMode = m
         applyAccountToCore()
-        if m == .serverless { devices = []; status = "" }
+        if m == .serverless { status = "" }
         NotificationCenter.default.post(name: .vivoAccountDidChange, object: nil)
     }
 
@@ -213,7 +213,6 @@ final class VivoCloudModel: ObservableObject {
         VivoAccount.signOut()
         signedIn = false
         registered = false
-        devices = []
         status = L("Signed out.")
         applyAccountToCore()
         NotificationCenter.default.post(name: .vivoAccountDidChange, object: nil)
@@ -227,7 +226,6 @@ final class VivoCloudModel: ObservableObject {
                 self?.registered = true
                 Store.vivoRegistered = true
                 self?.status = String(format: L("Registered as %@"), String(id.prefix(12)) + "…")
-                self?.refreshDevices()
             }
         }
     }
@@ -239,19 +237,7 @@ final class VivoCloudModel: ObservableObject {
             return { [weak self] in
                 self?.registered = false
                 Store.vivoRegistered = false
-                self?.devices = []
                 self?.status = L("This Mac is no longer registered.")
-            }
-        }
-    }
-
-    func refreshDevices() {
-        run(L("Loading devices…")) {
-            let raw = try pcsuite_cloud_devices().toString()
-            let list = raw.components(separatedBy: "\n").compactMap(CloudDevice.parse)
-            return { [weak self] in
-                self?.devices = list
-                self?.status = list.isEmpty ? L("No devices on this account yet.") : ""
             }
         }
     }
@@ -292,13 +278,13 @@ func applyAccountToCore() {
     }
 }
 
-// MARK: - Panel
+// MARK: - Account tab
 
-/// The mode switch plus, in account mode, sign-in / registration / device list.
-struct VivoAccountView: View {
+/// The mode switch plus, in account mode, sign-in / registration and the phones
+/// on the account (the same list the menu shows, owned by `AppModel`).
+struct AccountTab: View {
+    @ObservedObject var appModel: AppModel
     @StateObject private var model = VivoCloudModel()
-    var onConnect: (String) -> Void
-    var onDone: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -348,7 +334,10 @@ struct VivoAccountView: View {
                                 .foregroundStyle(.secondary)
                         }
                         if !model.status.isEmpty {
-                            Text(model.status).font(.caption).foregroundStyle(.secondary)
+                            HStack(spacing: 6) {
+                                if model.busy { ProgressView().controlSize(.small) }
+                                Text(model.status).font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                     } header: {
                         Text(L("vivo account"))
@@ -358,12 +347,12 @@ struct VivoAccountView: View {
 
                     if model.signedIn {
                         Section {
-                            if model.devices.isEmpty {
+                            if appModel.cloudPhones.isEmpty {
                                 Text(L("No phones listed yet."))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
-                            ForEach(model.devices.filter(\.isPhone)) { d in
+                            ForEach(appModel.cloudPhones) { d in
                                 HStack {
                                     VStack(alignment: .leading) {
                                         Text(d.name.isEmpty ? d.model : d.name)
@@ -377,12 +366,11 @@ struct VivoAccountView: View {
                                         }
                                     }
                                     Spacer()
-                                    Button(L("Connect")) { onConnect(d.ip) }
+                                    Button(L("Connect")) { appModel.connectCloud(d) }
                                         .disabled(d.ip.isEmpty)
                                 }
                             }
-                            Button(L("Refresh")) { model.refreshDevices() }
-                                .disabled(model.busy)
+                            Button(L("Refresh")) { appModel.refreshCloudPhones() }
                         } header: {
                             Text(L("Phones on this account"))
                         } footer: {
@@ -404,55 +392,12 @@ struct VivoAccountView: View {
                 }
             }
             .formStyle(.grouped)
-
-            Divider()
-            HStack {
-                if model.busy { ProgressView().controlSize(.small) }
-                Spacer()
-                Button(L("Done")) { onDone() }
-                    .keyboardShortcut(.defaultAction)
-            }
-            .padding(12)
         }
-        .frame(width: 480, height: 520)
         .sheet(isPresented: $model.showingLogin) {
             VivoLoginView(
                 onResult: { model.finishLogin($0) },
                 onCancel: { model.showingLogin = false }
             )
         }
-    }
-}
-
-/// Hosts `VivoAccountView` in its own window (menu-bar apps have none by default).
-final class VivoAccountWindowController {
-    static let shared = VivoAccountWindowController()
-    private var window: NSWindow?
-
-    func show(onConnect: @escaping (String) -> Void) {
-        if let w = window {
-            w.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-        let host = NSHostingController(rootView: VivoAccountView(
-            onConnect: onConnect,
-            onDone: { [weak self] in self?.window?.close() }
-        ))
-        let w = NSWindow(contentViewController: host)
-        w.title = L("Account & mode")
-        w.styleMask = [.titled, .closable]
-        w.isReleasedWhenClosed = false
-        w.center()
-        window = w
-        w.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    /// Close and drop the window so the next `show()` builds it afresh — its
-    /// model snapshots the sign-in / registered state when created.
-    func discard() {
-        window?.close()
-        window = nil
     }
 }

@@ -67,6 +67,13 @@
 "Reset all settings?" = "Reset all settings?";
 "This disconnects the phone, signs out of the vivo account, forgets every paired phone and the LAN identity, and puts every option back to its default. The app keeps running." = "This disconnects the phone, signs out of the vivo account, forgets every paired phone and the LAN identity, and puts every option back to its default. The app keeps running.";
 "Reset" = "Reset";
+"Signs out, forgets every phone and the LAN identity, and restores every default." = "Signs out, forgets every phone and the LAN identity, and restores every default.";
+"General" = "General";
+"Mirroring" = "Mirroring";
+"Identity" = "Identity";
+"Picture" = "Picture";
+"Audio" = "Audio";
+"Diagnostics" = "Diagnostics";
 
 /* verify-code notification */
 "Verification code" = "Verification code";

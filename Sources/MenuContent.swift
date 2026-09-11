@@ -64,7 +64,9 @@ struct MenuContent: View {
             // In account mode the phones (and their addresses) come from the
             // account, so offer that panel instead of only a hand-typed IP.
             if Store.connectionMode == .vivoAccount {
-                Button(L("Devices on my vivo account…")) { showAccountPanel() }
+                Button(L("Devices on my vivo account…")) {
+                    PreferencesWindowController.shared.show(model: model, tab: .account)
+                }
             }
             Button(L("Connect over USB")) { model.connectUSB() }
             Button(L("Connect over Wi-Fi…")) {
@@ -73,16 +75,6 @@ struct MenuContent: View {
                     if !t.isEmpty { model.lanIP = t; model.connectLAN() }
                 }
             }
-        }
-    }
-
-    /// Open the account panel, wiring its "Connect" buttons to a Wi-Fi connect
-    /// using the address the account reported for that phone.
-    private func showAccountPanel() {
-        VivoAccountWindowController.shared.show { ip in
-            guard !ip.isEmpty else { return }
-            model.lanIP = ip
-            model.connectLAN()
         }
     }
 
