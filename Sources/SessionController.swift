@@ -86,13 +86,14 @@ final class SessionController {
     /// (so the keyboard should type); `caret*` is the on-device caret in mirror
     /// pixel space when `hasCaret` is true.
     var onInputState: ((Bool, Bool, Double, Double) -> Void)?
-    /// An *established* session dropped unexpectedly (the shared control WS closed
-    /// or errored — covers USB unplug, Wi-Fi loss, and the phone ending the session,
+    /// An *established* session ended on its own (the shared control WS closed or
+    /// errored — covers USB unplug, Wi-Fi loss, and the phone ending the session,
     /// whether idle or mid-mirror). Delivered on the main queue *after* the dead
-    /// session has been torn down, carrying the device that was connected, so the
-    /// owner can decide whether to reconnect. Not fired for user-initiated
-    /// `disconnect()`.
-    var onConnectionLost: ((DeviceRef) -> Void)?
+    /// session has been torn down, carrying the device that was connected and
+    /// `phoneEnded`: true when the phone closed the session on purpose (the user
+    /// disconnected there — not worth dialling back), false when the link dropped.
+    /// Not fired for user-initiated `disconnect()`.
+    var onConnectionLost: ((_ device: DeviceRef, _ phoneEnded: Bool) -> Void)?
 
     private let queue = DispatchQueue(label: "com.pcsuite.session")
     private let inputQueue = DispatchQueue(label: "com.pcsuite.input")
@@ -809,15 +810,17 @@ final class SessionController {
         t.start()
     }
 
-    /// An established session dropped on its own. Release the dead handles and
-    /// report the loss so the owner can reconnect. Runs on `queue`.
+    /// An established session ended on its own. Release the dead handles and
+    /// report it so the owner can decide about reconnecting. Runs on `queue`.
     private func handleConnectionLost(reason: String) {
         let device = currentDevice
-        log("connection lost (\(reason))")
+        // The core's two verdicts (see `wait_disconnect` in the bridge).
+        let phoneEnded = reason == "closed by phone"
+        log("connection ended (\(reason))")
         teardownLocked()              // releases the dead session + stops the mirror
         connGen += 1                  // any other stale watcher/pump callback now no-ops
         emitState(.disconnected)      // a clean baseline; the owner may move to .reconnecting
-        if let device { emit { self.onConnectionLost?(device) } }
+        if let device { emit { self.onConnectionLost?(device, phoneEnded) } }
     }
 
     /// The mirror stream ended while the control session is still alive (the phone

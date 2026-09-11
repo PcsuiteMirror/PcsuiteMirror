@@ -439,11 +439,14 @@ final class AppModel: ObservableObject {
 
     // MARK: - Auto-reconnect on unexpected loss
 
-    /// An established session dropped (USB unplug, Wi-Fi loss, phone ended it). If
-    /// auto-reconnect is on, start a bounded backoff sequence to the same device;
-    /// otherwise just surface the loss to an open mirror window.
-    private func handleConnectionLost(_ device: DeviceRef) {
-        guard autoReconnect else {
+    /// An established session ended on its own. A dropped link (USB unplug, Wi-Fi
+    /// loss) starts the bounded reconnect sequence when auto-reconnect is on. A
+    /// session the phone ended on purpose does not: the user disconnected there,
+    /// and dialling straight back in would undo what they just did — they can
+    /// reconnect from the menu (or the phone) when they mean to.
+    private func handleConnectionLost(_ device: DeviceRef, phoneEnded: Bool) {
+        if phoneEnded { log("phone ended the session — not reconnecting") }
+        guard autoReconnect, !phoneEnded else {
             mirrorLink = mirror.isShowing ? .lost : .live
             return
         }
@@ -800,8 +803,8 @@ final class AppModel: ObservableObject {
                 break
             }
         }
-        controller.onConnectionLost = { [weak self] device in
-            self?.handleConnectionLost(device)
+        controller.onConnectionLost = { [weak self] device, phoneEnded in
+            self?.handleConnectionLost(device, phoneEnded: phoneEnded)
         }
         controller.onMirroring = { [weak self] on, layer in
             guard let self else { return }
