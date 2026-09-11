@@ -38,12 +38,21 @@ struct MenuContent: View {
                 }
                 Divider()
             }
+            // The live session before it is a roster row: the roster only learns
+            // a phone's id from /base-info, which lands a moment after connect —
+            // longer when the clipboard handshake runs first — and a first-time
+            // phone has no row at all until then. The actions can't wait for it,
+            // so until the row exists they hang off the connect target itself.
+            if model.isConnected, let cur = model.lastDevice,
+               !model.knownDevices.contains(where: { $0.id == model.activeDeviceId }) {
+                Menu("✓ \(cur.displayName)") { sessionActions }
+            }
             // Device-centric: one submenu per remembered phone. The active device
             // exposes mirror/disconnect; the others expose connect options.
             ForEach(model.knownDevices) { dev in
                 Menu(deviceLabel(dev)) { deviceMenu(dev) }
             }
-            if !model.knownDevices.isEmpty { Divider() }
+            if model.isConnected || !model.knownDevices.isEmpty { Divider() }
             // Account mode: every phone on the account, one click to connect at
             // the address it last reported. Flat rows on purpose — the roster
             // above has the per-device actions; this is the shortcut.
@@ -100,26 +109,31 @@ struct MenuContent: View {
         return !phone.name.isEmpty && cur.name == phone.name
     }
 
+    /// What can be done with the live session: mirror, send files, audio, disconnect.
+    @ViewBuilder private var sessionActions: some View {
+        if let info = model.deviceInfo {
+            Text("\(L("Storage")) \(info.storageSummary)")
+        }
+        Button(model.mirroring ? L("Stop mirroring") : L("Start mirroring")) {
+            if model.mirroring { model.closeMirror() } else { model.openMirror() }
+        }
+        Button(L("Send Files to Phone…")) { model.pushFiles(pickFilesToSend()) }
+        // Where the sound comes out. Switchable live — the picture keeps running.
+        Button(model.audioEnabled ? L("Move audio back to phone") : L("Move audio to this Mac")) {
+            model.setAudio(!model.audioEnabled)
+        }
+        if model.audioEnabled {
+            Button(model.audioMuted ? L("Unmute this Mac") : L("Mute this Mac")) {
+                model.toggleAudioMuted()
+            }
+        }
+        Button(L("Disconnect")) { model.disconnect() }
+    }
+
     /// The expanded actions for one remembered device.
     @ViewBuilder private func deviceMenu(_ dev: KnownDevice) -> some View {
         if model.isConnected && dev.id == model.activeDeviceId {
-            if let info = model.deviceInfo {
-                Text("\(L("Storage")) \(info.storageSummary)")
-            }
-            Button(model.mirroring ? L("Stop mirroring") : L("Start mirroring")) {
-                if model.mirroring { model.closeMirror() } else { model.openMirror() }
-            }
-            Button(L("Send Files to Phone…")) { model.pushFiles(pickFilesToSend()) }
-            // Where the sound comes out. Switchable live — the picture keeps running.
-            Button(model.audioEnabled ? L("Move audio back to phone") : L("Move audio to this Mac")) {
-                model.setAudio(!model.audioEnabled)
-            }
-            if model.audioEnabled {
-                Button(model.audioMuted ? L("Unmute this Mac") : L("Mute this Mac")) {
-                    model.toggleAudioMuted()
-                }
-            }
-            Button(L("Disconnect")) { model.disconnect() }
+            sessionActions
         } else {
             Button(L("Connect over Wi-Fi")) { model.connect(dev, method: .lan) }
                 .disabled((dev.lastIP ?? "").isEmpty)
