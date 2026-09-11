@@ -260,6 +260,53 @@ final class AppModel: ObservableObject {
     func cancelConnect() { cancelReconnect(); controller.cancel() }
     func disconnect() { cancelReconnect(); closeMirror(); controller.disconnect() }
 
+    /// Start over as if freshly installed: drop the session, sign out of the vivo
+    /// account, forget every phone and the LAN identity, and put every option
+    /// back to its default — in the store, in the core, and in this model. The
+    /// app keeps running.
+    func resetAllSettings() {
+        disconnect()
+        // `disconnect()` reports .disconnected only once the session is really
+        // gone; move there now so nothing below (a toggle's live-apply, a late
+        // /base-info) mistakes the dying session for a live one.
+        state = .disconnected
+        // The core holds the seeds it was handed as overrides; hand back empties
+        // so no part of the old identity outlives the store.
+        for e in Store.seeds {
+            pcsuite_set_seed(e.ip.trimmingCharacters(in: .whitespacesAndNewlines), "")
+        }
+        VivoAccount.signOut()
+        Store.resetAll()
+        applyIdentityToCore()
+        // Restart the LAN beacon: it snapshots the identity when it starts.
+        do { try pcsuite_presence_start() } catch { log("presence: \(ffiMessage(error))") }
+        // Those windows snapshot the store when built; drop them so the next
+        // open reads the fresh values.
+        SettingsWindowController.shared.discard()
+        VivoAccountWindowController.shared.discard()
+        QRPairingWindowController.shared.close()
+        // Re-read every published value. Each didSet writes the default back
+        // to the store, which is fine, and none applies live — nothing is connected.
+        autoReconnect = Store.autoReconnect
+        clipboardEnabled = Store.clipboardEnabled
+        clipboardDirection = Store.clipboardDirection
+        verifyEnabled = Store.verifyEnabled
+        notifyEnabled = Store.notifyEnabled
+        showStats = Store.showStats
+        lanIP = Store.lanIP
+        resolution = Store.resolution
+        bitrate = Store.bitrate
+        frameRate = Store.frameRate
+        audioEnabled = Store.mirrorAudio
+        audioMuted = false
+        lastDevice = nil
+        knownDevices = []
+        activeDeviceId = nil
+        deviceInfo = nil
+        fileTransferNote = nil
+        log("all settings reset")
+    }
+
     // MARK: - File transfer
 
     /// Send local files to the phone (dropped onto the mirror window or picked
@@ -717,7 +764,9 @@ final class AppModel: ObservableObject {
             }
         }
         controller.onDeviceInfo = { [weak self] info in
-            guard let self else { return }
+            // The fetch isn't generation-guarded: one that lands after a reset
+            // would write the old phone (and openID) straight back into the store.
+            guard let self, self.isConnected else { return }
             self.deviceInfo = info
             self.autoFillOpenID(info.openID)
             self.rememberConnectedDevice(info)

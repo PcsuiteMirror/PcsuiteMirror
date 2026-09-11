@@ -170,10 +170,26 @@ struct PreferencesView: View {
                 Button(L("Account & mode…")) { onAccount() }
                     .buttonStyle(.link)
                 Spacer()
+                Button(L("Reset all settings…")) { confirmReset() }
+                    .buttonStyle(.link)
+                    .foregroundStyle(.red)
             }
             .padding(12)
         }
         .frame(width: 440, height: 360)
+    }
+
+    /// Ask first: this signs the account out and forgets every phone, and
+    /// there is no undo.
+    private func confirmReset() {
+        let alert = NSAlert()
+        alert.messageText = L("Reset all settings?")
+        alert.informativeText = L("This disconnects the phone, signs out of the vivo account, forgets every paired phone and the LAN identity, and puts every option back to its default. The app keeps running.")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L("Reset")).hasDestructiveAction = true
+        alert.addButton(withTitle: L("Cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        model.resetAllSettings()
     }
 }
 
@@ -234,5 +250,12 @@ final class SettingsWindowController {
         window = w
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Close and drop the window so the next `show()` builds it afresh — its
+    /// fields snapshot the store when created.
+    func discard() {
+        window?.close()
+        window = nil
     }
 }

@@ -394,6 +394,19 @@ enum Store {
         get { flag("vivoRegistered", default: false) }
         set { d.set(newValue, forKey: "vivoRegistered") }
     }
+
+    // MARK: - Reset
+
+    /// Forget every persisted setting, as if the app had just been installed.
+    /// Drops the whole defaults domain rather than going key by key, so a key
+    /// added later can't be left behind. The account token is in the keychain,
+    /// not here — clear it with `VivoAccount.signOut()` first.
+    static func resetAll() {
+        if let id = Bundle.main.bundleIdentifier {
+            d.removePersistentDomain(forName: id)
+        }
+        d.synchronize()
+    }
 }
 
 /// The signed-in vivo account. The **token is a credential**, so it lives in the

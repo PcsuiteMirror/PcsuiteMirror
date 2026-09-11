@@ -63,6 +63,10 @@
 "Connection" = "Connection";
 "Notification relay" = "Notification relay";
 "Identity / account…" = "Identity / account…";
+"Reset all settings…" = "Reset all settings…";
+"Reset all settings?" = "Reset all settings?";
+"This disconnects the phone, signs out of the vivo account, forgets every paired phone and the LAN identity, and puts every option back to its default. The app keeps running." = "This disconnects the phone, signs out of the vivo account, forgets every paired phone and the LAN identity, and puts every option back to its default. The app keeps running.";
+"Reset" = "Reset";
 
 /* verify-code notification */
 "Verification code" = "Verification code";

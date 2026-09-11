@@ -63,6 +63,10 @@
 "Connection" = "连接";
 "Notification relay" = "通知接力";
 "Identity / account…" = "身份 / 账号…";
+"Reset all settings…" = "重置所有设置…";
+"Reset all settings?" = "要重置所有设置吗？";
+"This disconnects the phone, signs out of the vivo account, forgets every paired phone and the LAN identity, and puts every option back to its default. The app keeps running." = "将断开手机、退出 vivo 账号、忘记所有已配对的手机和局域网身份，并把每个选项恢复为默认值。应用会继续运行。";
+"Reset" = "重置";
 
 /* QR pairing */
 "Pair via QR…" = "扫码配对…";

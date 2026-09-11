@@ -439,4 +439,11 @@ final class VivoAccountWindowController {
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    /// Close and drop the window so the next `show()` builds it afresh — its
+    /// model snapshots the sign-in / registered state when created.
+    func discard() {
+        window?.close()
+        window = nil
+    }
 }
