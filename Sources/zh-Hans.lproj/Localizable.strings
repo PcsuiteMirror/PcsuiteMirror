@@ -172,3 +172,10 @@
 "Scan the code with your phone to sign in." = "用手机扫码完成登录。";
 "Signed in, but the page did not return the expected credentials." = "登录成功，但页面未返回预期的凭据。";
 "last seen %@" = "最后上报 %@";
+"Keep this Mac discoverable" = "保持本机可被发现（可连）";
+"Holds a background connection to the phone so it lists this Mac as available. Turn off to stop appearing until you connect." = "在后台保持一条到手机的连接，让手机把本机显示为「可连」。关闭后手机将不再显示，直到你手动连接。";
+"Discoverable — the phone can see this Mac" = "可被发现——手机能看到本机";
+"Connecting…" = "连接中…";
+"Reconnecting…" = "重连中…";
+"Not held" = "未保持";
+"Not available: %@" = "不可用：%@";

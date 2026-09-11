@@ -146,3 +146,10 @@
 "Scan the code with your phone to sign in." = "Scan the code with your phone to sign in.";
 "Signed in, but the page did not return the expected credentials." = "Signed in, but the page did not return the expected credentials.";
 "last seen %@" = "last seen %@";
+"Keep this Mac discoverable" = "Keep this Mac discoverable";
+"Holds a background connection to the phone so it lists this Mac as available. Turn off to stop appearing until you connect." = "Holds a background connection to the phone so it lists this Mac as available. Turn off to stop appearing until you connect.";
+"Discoverable — the phone can see this Mac" = "Discoverable — the phone can see this Mac";
+"Connecting…" = "Connecting…";
+"Reconnecting…" = "Reconnecting…";
+"Not held" = "Not held";
+"Not available: %@" = "Not available: %@";

@@ -101,6 +101,20 @@ final class AppModel: ObservableObject {
     private var cloudRefreshInFlight = false
     private let cloudRefreshInterval: TimeInterval = 60
 
+    /// Account mode: hold a 10191 connection to the phone open so it lists this
+    /// Mac as discoverable ("可连"). Toggling re-evaluates the hold.
+    @Published var holdPresence: Bool {
+        didSet { Store.holdPresence = holdPresence; syncPresenceHold() }
+    }
+    /// Live presence state for the UI: "", "connecting", "holding", "reconnecting",
+    /// "error: …" or "stopped".
+    @Published private(set) var presenceStatus: String = ""
+    /// The running presence hold (nil = not holding). Dropping it stops the hold.
+    private var cloudPresence: PcCloudPresence?
+    /// The phone IP the current hold targets, so a roamed address restarts it.
+    private var presencePhoneIP: String = ""
+    private var presenceStatusTimer: Timer?
+
     private let controller = SessionController()
     private lazy var mirror = MirrorWindowManager(model: self)
 
@@ -134,6 +148,7 @@ final class AppModel: ObservableObject {
 
     init() {
         autoReconnect = Store.autoReconnect
+        holdPresence = Store.holdPresence
         clipboardEnabled = Store.clipboardEnabled
         clipboardDirection = Store.clipboardDirection
         verifyEnabled = Store.verifyEnabled
@@ -286,6 +301,7 @@ final class AppModel: ObservableObject {
         cloudAccountActive = active
         guard active else {
             if !cloudPhones.isEmpty { cloudPhones = [] }
+            syncPresenceHold()   // signed out → drop any hold
             return
         }
         refreshCloudPhones()
@@ -324,8 +340,52 @@ final class AppModel: ObservableObject {
                     self.cloudPhones = phones
                     log("account phone list: \(phones.map { "\($0.name)@\($0.ip)" }.joined(separator: ", "))")
                 }
+                // (Re)hold presence to the account phone; a roamed IP restarts it.
+                self.syncPresenceHold()
             }
         }
+    }
+
+    // MARK: - Presence hold (account mode「可连」)
+
+    /// Reconcile the presence hold with the current state: hold a 10191 connection
+    /// to the account phone while signed in + `holdPresence`, drop it otherwise,
+    /// and restart it when the phone's IP changes.
+    private func syncPresenceHold() {
+        let wanted = cloudAccountActive && holdPresence
+        let ip = cloudPhones.first(where: { !$0.ip.isEmpty })?.ip ?? ""
+        guard wanted, !ip.isEmpty else {
+            if cloudPresence != nil { stopPresenceHold() }
+            return
+        }
+        if cloudPresence != nil && ip == presencePhoneIP { return }  // already holding this IP
+        startPresenceHold(ip: ip)
+    }
+
+    private func startPresenceHold(ip: String) {
+        stopPresenceHold()
+        applyAccountToCore()        // ensure the core has the account before it fetches the seed
+        applyIdentityToCore()       // ensure a real businessId (target_id) is set
+        presencePhoneIP = ip
+        presenceStatus = "connecting"
+        cloudPresence = pcsuite_cloud_presence_start(ip, false)
+        log("presence hold: → \(ip)")
+        // Poll the Rust-side status for the UI (cheap lock read).
+        presenceStatusTimer?.invalidate()
+        presenceStatusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self, let p = self.cloudPresence else { return }
+            let s = p.status().toString()
+            if s != self.presenceStatus { self.presenceStatus = s }
+        }
+    }
+
+    private func stopPresenceHold() {
+        presenceStatusTimer?.invalidate()
+        presenceStatusTimer = nil
+        cloudPresence?.stop()
+        cloudPresence = nil
+        presencePhoneIP = ""
+        if !presenceStatus.isEmpty { presenceStatus = "" }
     }
 
     /// Connect a remembered device over the chosen transport. Wi-Fi uses the

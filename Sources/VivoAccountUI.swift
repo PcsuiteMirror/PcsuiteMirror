@@ -132,6 +132,21 @@ struct VivoLoginView: View {
 
 // MARK: - Cloud model
 
+/// Map a raw `PcCloudPresence.status()` string to a localized, user-facing label.
+func presenceStatusLabel(_ raw: String) -> String {
+    switch raw {
+    case "holding": return L("Discoverable — the phone can see this Mac")
+    case "connecting": return L("Connecting…")
+    case "reconnecting": return L("Reconnecting…")
+    case "stopped", "": return L("Not held")
+    default:
+        if raw.hasPrefix("error: ") {
+            return String(format: L("Not available: %@"), String(raw.dropFirst("error: ".count)))
+        }
+        return raw
+    }
+}
+
 /// One device as the connection centre knows it (parsed from the core's
 /// tab-separated `pcsuite_cloud_devices()` output).
 struct CloudDevice: Identifiable, Equatable {
@@ -375,6 +390,22 @@ struct AccountTab: View {
                             Text(L("Phones on this account"))
                         } footer: {
                             Text(L("Addresses come from the account, so a phone can be connected to without typing its IP. The phone starting the session itself is not supported yet."))
+                        }
+
+                        Section {
+                            Toggle(L("Keep this Mac discoverable"), isOn: $appModel.holdPresence)
+                            if appModel.holdPresence, !appModel.presenceStatus.isEmpty {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(appModel.presenceStatus == "holding" ? Color.green : .secondary)
+                                        .frame(width: 7, height: 7)
+                                    Text(presenceStatusLabel(appModel.presenceStatus))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        } footer: {
+                            Text(L("Holds a background connection to the phone so it lists this Mac as available. Turn off to stop appearing until you connect."))
                         }
                     }
 

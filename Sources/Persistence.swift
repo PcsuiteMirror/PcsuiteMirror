@@ -267,6 +267,13 @@ enum Store {
         get { flag("autoReconnect", default: true) }
         set { d.set(newValue, forKey: "autoReconnect") }
     }
+    /// Account mode: keep a 10191 presence connection to the phone open so the
+    /// phone's connection center lists this Mac as discoverable ("可连"). On by
+    /// default — that's the point of registering.
+    static var holdPresence: Bool {
+        get { flag("holdPresence", default: true) }
+        set { d.set(newValue, forKey: "holdPresence") }
+    }
     static var clipboardEnabled: Bool {
         get { flag("clipboardEnabled", default: true) }
         set { d.set(newValue, forKey: "clipboardEnabled") }
