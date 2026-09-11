@@ -102,6 +102,7 @@
 "No phone over USB — plug in the cable and allow USB debugging on the phone" = "USB 上没有手机 — 请插好数据线并在手机上允许 USB 调试";
 "adb not found — install Android platform-tools to connect over USB" = "未找到 adb — 请安装 Android platform-tools 后再使用 USB 连接";
 "The phone didn't answer over USB — unlock it, keep the screen on, and try again" = "手机在 USB 上没有响应 — 请解锁手机、保持屏幕常亮后重试";
+"couldn't reach %@ after several attempts" = "多次尝试后仍无法连上 %@";
 
 /* file transfer (拖拽发送 + 手机快传) */
 "Send Files to Phone…" = "发送文件到手机…";

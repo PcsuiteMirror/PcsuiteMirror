@@ -332,7 +332,7 @@ final class AppModel: ObservableObject {
                     // is a real failure, unlike a missing cable, so the budget
                     // applies here and only here.
                     guard self.reconnectAttempts < self.maxReconnectAttempts else {
-                        self.giveUpReconnect(message: self.lastReconnectError)
+                        self.giveUpReconnect(status: self.retriesExhausted(dev), reason: self.lastReconnectError)
                         return
                     }
                     self.fireReconnect(gen: gen, device: dev)
@@ -341,7 +341,7 @@ final class AppModel: ObservableObject {
                 case .noAdb:
                     // No adb binary: USB can never come up, so waiting is pointless.
                     log("USB: adb is unusable — ending the reconnect wait")
-                    self.giveUpReconnect(message: L("adb not found — install Android platform-tools to connect over USB"))
+                    self.giveUpReconnect(status: L("adb not found — install Android platform-tools to connect over USB"))
                 }
             }
         }
@@ -372,17 +372,27 @@ final class AppModel: ObservableObject {
         scheduleReconnect(gen: gen, delay: cablePolls < 8 ? 2 : 6)
     }
 
-    /// End the sequence. `message` (already user-facing) is shown as the failure
-    /// status for a few seconds; nil ends it silently.
-    private func giveUpReconnect(message: String?) {
-        if let message { log("auto-reconnect gave up: \(message)") }
+    /// End the sequence. `status` (short, user-facing) is shown as the failure
+    /// status for a few seconds; nil ends it silently. `reason` — the last
+    /// attempt's error — only goes to the log: a core failure is a whole context
+    /// chain on one line, and after a drop the user already knows the phone is
+    /// gone; they don't need the transport's account of it in a menu label.
+    private func giveUpReconnect(status: String?, reason: String? = nil) {
+        if status != nil || reason != nil {
+            log("auto-reconnect gave up: \(reason ?? status ?? "")")
+        }
         let showing = mirror.isShowing
         cancelReconnect()
         mirrorLink = showing ? .lost : .live
-        if let message {
-            state = .failed(message)
+        if let status {
+            state = .failed(status)
             scheduleFailedReset()
         }
+    }
+
+    /// The status shown when the retry budget runs out, whatever the last error was.
+    private func retriesExhausted(_ device: DeviceRef) -> String {
+        String(format: L("couldn't reach %@ after several attempts"), device.displayName)
     }
 
     /// Turn a raw core failure into something worth showing a person.
@@ -621,7 +631,9 @@ final class AppModel: ObservableObject {
                 }
                 self.lastReconnectError = message
                 let backoff = min(8.0, pow(2.0, Double(max(1, self.reconnectAttempts) - 1)))
-                guard self.autoReconnect else { self.giveUpReconnect(message: message); break }
+                // Auto-reconnect was switched off under a running attempt: the
+                // user ended this themselves, so there's nothing to announce.
+                guard self.autoReconnect else { self.giveUpReconnect(status: nil, reason: message); break }
                 // USB skips the budget check here: whether this failure even counts
                 // depends on the cable, and only the probe in scheduleReconnect
                 // knows that. Everything else gives up once the budget is spent.
@@ -629,7 +641,7 @@ final class AppModel: ObservableObject {
                     log("auto-reconnect retry in \(Int(backoff))s (\(message))")
                     self.scheduleReconnect(gen: self.reconnectGen, delay: backoff)
                 } else {
-                    self.giveUpReconnect(message: message)
+                    self.giveUpReconnect(status: self.retriesExhausted(dev), reason: message)
                 }
             default:
                 break

@@ -75,6 +75,7 @@
 "No phone over USB — plug in the cable and allow USB debugging on the phone" = "No phone over USB — plug in the cable and allow USB debugging on the phone";
 "adb not found — install Android platform-tools to connect over USB" = "adb not found — install Android platform-tools to connect over USB";
 "The phone didn't answer over USB — unlock it, keep the screen on, and try again" = "The phone didn't answer over USB — unlock it, keep the screen on, and try again";
+"couldn't reach %@ after several attempts" = "couldn't reach %@ after several attempts";
 
 /* file transfer (drag-and-drop push + phone→PC 快传) */
 "Send Files to Phone…" = "Send Files to Phone…";
