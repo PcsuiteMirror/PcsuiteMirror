@@ -352,23 +352,18 @@ final class AppModel: ObservableObject {
     /// to the account phone while signed in + `holdPresence`, drop it otherwise,
     /// and restart it when the phone's IP changes.
     private func syncPresenceHold() {
-        // The phone's device-centre "online" dot is driven by the held 10191
-        // presence connection, NOT by the 10380 control session — so once
-        // connected we must KEEP presence held (10191) alongside the session
-        // (10380, a different port), exactly as the official service does, or the
-        // phone greys the device out even while a session is live.
-        //
-        // Only PAUSE presence while actively *connecting*: the connect does its own
-        // brief 10191 ConnectFlow register, and the phone accepts only one 10191
-        // connection at a time — a held presence there would make the register (and
-        // thus 10380) fail. Idle and connected both hold presence.
-        let connecting: Bool = {
+        // Hold presence (10191) only while idle. A live/forming session runs its
+        // own 10191 ConnectFlow, and the phone accepts one 10191 per PC — so
+        // presence must step aside during connect. When the phone itself taps
+        // 「连接」, the presence task hands its token to the session and ends
+        // (PresenceOutcome.connectRequested), then this resumes it on disconnect.
+        let sessionActive: Bool = {
             switch state {
-            case .connecting, .reconnecting: return true
-            default: return false
+            case .disconnected, .failed: return false
+            default: return true
             }
         }()
-        let wanted = cloudAccountActive && holdPresence && !connecting
+        let wanted = cloudAccountActive && holdPresence && !sessionActive
         let ip = cloudPhones.first(where: { !$0.ip.isEmpty })?.ip ?? ""
         guard wanted, !ip.isEmpty else {
             if cloudPresence != nil { stopPresenceHold() }
