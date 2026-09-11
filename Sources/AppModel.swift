@@ -352,17 +352,23 @@ final class AppModel: ObservableObject {
     /// to the account phone while signed in + `holdPresence`, drop it otherwise,
     /// and restart it when the phone's IP changes.
     private func syncPresenceHold() {
-        // Presence and a live session both do a 10191 ConnectFlow to the phone,
-        // which only accepts one connection per PC — so they fight (the phone
-        // closes one, control WS to 10380 gets refused). Hold presence ONLY while
-        // idle; a real connect takes over, and disconnecting resumes presence.
-        let sessionActive: Bool = {
+        // The phone's device-centre "online" dot is driven by the held 10191
+        // presence connection, NOT by the 10380 control session — so once
+        // connected we must KEEP presence held (10191) alongside the session
+        // (10380, a different port), exactly as the official service does, or the
+        // phone greys the device out even while a session is live.
+        //
+        // Only PAUSE presence while actively *connecting*: the connect does its own
+        // brief 10191 ConnectFlow register, and the phone accepts only one 10191
+        // connection at a time — a held presence there would make the register (and
+        // thus 10380) fail. Idle and connected both hold presence.
+        let connecting: Bool = {
             switch state {
-            case .disconnected, .failed: return false
-            default: return true
+            case .connecting, .reconnecting: return true
+            default: return false
             }
         }()
-        let wanted = cloudAccountActive && holdPresence && !sessionActive
+        let wanted = cloudAccountActive && holdPresence && !connecting
         let ip = cloudPhones.first(where: { !$0.ip.isEmpty })?.ip ?? ""
         guard wanted, !ip.isEmpty else {
             if cloudPresence != nil { stopPresenceHold() }
@@ -858,9 +864,12 @@ final class AppModel: ObservableObject {
             case .connecting, .reconnecting: break
             default: QRPairingWindowController.shared.close()
             }
+            // Keep the 10191 presence in step with the session: pause while
+            // connecting (its own 10191 register would clash), hold again once
+            // connected (so the phone keeps showing this Mac online, not greyed).
+            self.syncPresenceHold()
             switch st {
             case .connected(let d):
-                self.syncPresenceHold()   // live session owns the link → drop presence
                 self.lastDevice = d
                 Store.lastDevice = d
                 // Highlight the matching roster entry right away; `/base-info` will
@@ -876,7 +885,6 @@ final class AppModel: ObservableObject {
                 self.deviceInfo = nil
                 self.activeDeviceId = nil
                 self.fileTransferNote = nil
-                self.syncPresenceHold()   // idle again → resume presence (可连)
             case .failed(let message):
                 // A reconnect attempt failed: back off and retry, or give up.
                 guard let dev = self.reconnectDevice else {
