@@ -17,6 +17,12 @@
 "Can't reach %@ — no cable, and no Wi-Fi address is known for it" = "无法连接 %@：没有插数据线，也没有已知的无线地址";
 "Can't reach %@ over USB or Wi-Fi — check it's on the same network and awake" = "无法连接 %@：有线和无线都不通，请确认手机在同一网络且已唤醒";
 "Can't reach %@ — allow USB debugging on the phone, or put it on this network" = "无法连接 %@：请在手机上允许 USB 调试，或让手机接入本机所在的网络";
+"Can't reach %@ over USB, Wi-Fi or Tailscale — check it's awake and on a network" = "无法连接 %@：有线、无线和 Tailscale 都不通，请确认手机已唤醒并连着网络";
+"Set Tailscale address…" = "设置 Tailscale 地址…";
+"Change Tailscale address…" = "修改 Tailscale 地址…";
+"Tailscale address" = "Tailscale 地址";
+"Enter the phone's Tailscale address. It is tried last, when the cable and Wi-Fi both fail. Leave blank to remove it." = "输入手机的 Tailscale 地址。有线和无线都连不上时才会用它。留空则清除。";
+"Save" = "保存";
 "New Connect" = "新建连接";
 "Pair new device (QR)…" = "扫码配对新设备…";
 "Forget this device" = "忘记此设备";

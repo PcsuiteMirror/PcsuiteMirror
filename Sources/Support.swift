@@ -66,14 +66,28 @@ func ffiMessage(_ error: Error) -> String {
 /// Modal prompt for a phone IP (a standard menu can't host a text field). Returns
 /// the entered string, or nil if cancelled.
 func promptForIP(default value: String) -> String? {
+    promptForAddress(title: L("Connect over Wi-Fi"), message: L("Enter the phone's IP address"),
+                     default: value, placeholder: "192.168.x.x", button: L("Connect"))
+}
+
+/// Modal prompt for a remembered phone's Tailscale address. Returns the entered
+/// string (blank = clear it), or nil if cancelled.
+func promptForTailscaleIP(default value: String) -> String? {
+    promptForAddress(title: L("Tailscale address"),
+                     message: L("Enter the phone's Tailscale address. It is tried last, when the cable and Wi-Fi both fail. Leave blank to remove it."),
+                     default: value, placeholder: "100.x.x.x", button: L("Save"))
+}
+
+private func promptForAddress(title: String, message: String, default value: String,
+                              placeholder: String, button: String) -> String? {
     let alert = NSAlert()
-    alert.messageText = L("Connect over Wi-Fi")
-    alert.informativeText = L("Enter the phone's IP address")
+    alert.messageText = title
+    alert.informativeText = message
     let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
     field.stringValue = value
-    field.placeholderString = "192.168.x.x"
+    field.placeholderString = placeholder
     alert.accessoryView = field
-    alert.addButton(withTitle: L("Connect"))
+    alert.addButton(withTitle: button)
     alert.addButton(withTitle: L("Cancel"))
     NSApp.activate(ignoringOtherApps: true)
     alert.window.initialFirstResponder = field

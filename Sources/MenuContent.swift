@@ -104,7 +104,9 @@ struct MenuContent: View {
     /// address, or failing that the name.
     private func isActive(_ phone: CloudDevice) -> Bool {
         guard model.isConnected, let cur = model.lastDevice, cur.transport == .lan else { return false }
-        if let ip = cur.ip, !ip.isEmpty { return ip == phone.ip }
+        // A Tailscale session is at an address the list never carries; the name
+        // is all there is to go on.
+        if cur.remote != true, let ip = cur.ip, !ip.isEmpty { return ip == phone.ip }
         return !phone.name.isEmpty && cur.name == phone.name
     }
 
@@ -137,10 +139,21 @@ struct MenuContent: View {
             // One entry, not a transport menu: the app can tell which route is
             // available faster than the user can, and picking wrong is the common
             // mistake (a cable that isn't plugged in produces an adb diagnostic).
-            // Cable first, then Wi-Fi at the freshest address — see connectAuto.
+            // Cable first, then Wi-Fi at the freshest address, then Tailscale if
+            // the user gave one — see connectAuto.
             Button(L("Connect")) { model.connectAuto(dev) }
         }
         Divider()
+        // The one address the app can't learn on its own: the phone's Tailscale
+        // one, used only after the cable and Wi-Fi have both failed.
+        if let ts = dev.tailscale {
+            Text("Tailscale · \(ts)")
+        }
+        Button(dev.tailscale == nil ? L("Set Tailscale address…") : L("Change Tailscale address…")) {
+            if let ip = promptForTailscaleIP(default: dev.tailscale ?? "") {
+                model.setTailscaleIP(dev, ip)
+            }
+        }
         Button(L("Forget this device")) { model.forget(dev) }
     }
 }

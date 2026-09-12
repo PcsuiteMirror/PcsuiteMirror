@@ -501,7 +501,11 @@ final class AppModel: ObservableObject {
     /// Falls back to the plain path whenever there is no hold for that IP, or the upgrade
     /// fails. The upgrade talks to the phone, so it runs off the main thread.
     private func connectRidingPresence(_ ref: DeviceRef, reconnect: Bool) {
-        guard let ip = ref.ip, !ip.isEmpty else {
+        // A Tailscale address is outside the hold's world: presence tracks the
+        // phone's Wi-Fi address, and a hold there is what the phone shows as this
+        // Mac on its own network. Starting one toward Tailscale would only open a
+        // 10191 the plain connect is about to open anyway.
+        guard let ip = ref.ip, !ip.isEmpty, ref.remote != true else {
             controller.connect(ref, features: features, reconnect: reconnect)
             return
         }
@@ -550,16 +554,23 @@ final class AppModel: ObservableObject {
     // MARK: - Automatic transport choice
 
     /// The remembered device an auto-connect sequence is running for, and the
-    /// message to show if its Wi-Fi leg fails. Both cleared once it settles.
+    /// message to show if its current leg fails. Both cleared once it settles.
     private var autoConnectID: String?
     private var autoConnectFailure: String?
+    /// The Tailscale leg an auto-connect still holds in reserve — taken when the
+    /// Wi-Fi leg fails instead of reporting that failure — and what to say if it
+    /// fails too.
+    private var autoConnectTailscale: (ref: DeviceRef, failure: String)?
 
     /// Connect a remembered phone without making the user pick a transport.
     ///
     /// Cable first — it is faster and needs no address — then Wi-Fi at the
-    /// freshest address we have rather than the remembered one. If neither works
-    /// the user gets one plain "can't reach it" instead of the adb diagnostic a
-    /// wired attempt against an unplugged phone would produce.
+    /// freshest address we have rather than the remembered one, then, when the
+    /// user gave the phone a Tailscale address, that: it reaches a phone on any
+    /// network, at the price of the round trip, so it is the last resort rather
+    /// than a peer of the others. If nothing works the user gets one plain
+    /// "can't reach it" instead of the adb diagnostic a wired attempt against an
+    /// unplugged phone would produce.
     ///
     /// Caveat, inherited from the wired path generally: USB connects to whatever
     /// phone is on the cable, and the roster is keyed by the phone's own device
@@ -571,6 +582,7 @@ final class AppModel: ObservableObject {
         cancelReconnect()
         autoConnectID = device.id
         autoConnectFailure = nil
+        autoConnectTailscale = nil
         // Name-only ref: the transport isn't decided yet, and the status line
         // shows `displayName`, which is the phone's name either way.
         state = .connecting(DeviceRef(transport: .usb, ip: nil, name: device.name))
@@ -586,7 +598,26 @@ final class AppModel: ObservableObject {
                                         features: self.features, reconnect: false)
                 return
             }
+            // Whatever the remaining legs report, the user asked for "connect to
+            // this phone" and every route is now spent — so say that, once. When
+            // the cable was the fixable half, say *that* instead: a phone sitting
+            // on an unauthorized cable is one tap on the phone away from working,
+            // and "check the network" would send the user the wrong way.
+            let tailscale = device.tailscale.map { ts in
+                (ref: DeviceRef(transport: .lan, ip: ts, name: device.name, remote: true),
+                 failure: link == .unauthorized
+                    ? String(format: L("Can't reach %@ — allow USB debugging on the phone, or put it on this network"),
+                             device.menuLabel)
+                    : String(format: L("Can't reach %@ over USB, Wi-Fi or Tailscale — check it's awake and on a network"),
+                             device.menuLabel))
+            }
             guard let ip = self.freshestIP(for: device) else {
+                if let ts = tailscale {
+                    log("自动连接: 无有线(\(link.rawValue)), 也没有已知的 Wi-Fi 地址 → Tailscale \(ts.ref.ip ?? "?")")
+                    self.autoConnectFailure = ts.failure
+                    self.controller.connect(ts.ref, features: self.features, reconnect: false)
+                    return
+                }
                 log("自动连接: 无有线, 也没有已知的 Wi-Fi 地址 → 失败")
                 self.autoConnectID = nil
                 self.state = .failed(String(format: L("Can't reach %@ — no cable, and no Wi-Fi address is known for it"),
@@ -595,19 +626,41 @@ final class AppModel: ObservableObject {
                 return
             }
             log("自动连接: 无有线(\(link.rawValue)) → Wi-Fi \(ip)")
-            // Whatever the LAN leg reports, the user asked for "connect to this
-            // phone" and both routes are now spent — so say that, once. When the
-            // cable was the fixable half, say *that* instead: a phone sitting on
-            // an unauthorized cable is one tap on the phone away from working,
-            // and "check the network" would send the user the wrong way.
             self.autoConnectFailure = link == .unauthorized
                 ? String(format: L("Can't reach %@ — allow USB debugging on the phone, or put it on this network"),
                          device.menuLabel)
                 : String(format: L("Can't reach %@ over USB or Wi-Fi — check it's on the same network and awake"),
                          device.menuLabel)
+            // A Tailscale address that is also the freshest Wi-Fi address would
+            // only be dialled twice.
+            self.autoConnectTailscale = tailscale.flatMap { $0.ref.ip == ip ? nil : $0 }
             self.connectRidingPresence(DeviceRef(transport: .lan, ip: ip, name: device.name),
                                        reconnect: false)
         }
+    }
+
+    /// Take the Tailscale leg an auto-connect holds in reserve, if any: the Wi-Fi
+    /// leg just failed, and there is one more route to try before saying so.
+    /// Returns whether it was taken (the caller then stays quiet about the failure).
+    private func fallBackToTailscale() -> Bool {
+        guard autoConnectID != nil, let ts = autoConnectTailscale else { return false }
+        autoConnectTailscale = nil
+        autoConnectFailure = ts.failure
+        log("自动连接: Wi-Fi 不通 → Tailscale \(ts.ref.ip ?? "?")")
+        state = .connecting(ts.ref)
+        controller.connect(ts.ref, features: features, reconnect: false)
+        return true
+    }
+
+    /// Set (or, with a blank address, clear) a remembered phone's Tailscale
+    /// address — the route `connectAuto` falls back to when the cable and Wi-Fi
+    /// both fail.
+    func setTailscaleIP(_ device: KnownDevice, _ ip: String) {
+        guard let i = knownDevices.firstIndex(where: { $0.id == device.id }) else { return }
+        let ts = ip.trimmingCharacters(in: .whitespacesAndNewlines)
+        knownDevices[i].tailscaleIP = ts.isEmpty ? nil : ts
+        Store.knownDevices = knownDevices
+        log("roster: \(device.menuLabel) Tailscale 地址 → \(ts.isEmpty ? "(清除)" : ts)")
     }
 
     /// The best Wi-Fi address for a remembered phone.
@@ -655,6 +708,7 @@ final class AppModel: ObservableObject {
     func cancelConnect() {
         autoConnectID = nil
         autoConnectFailure = nil
+        autoConnectTailscale = nil
         cancelReconnect()
         controller.cancel()
     }
@@ -805,8 +859,10 @@ final class AppModel: ObservableObject {
         var dev = device
         // In account mode the remembered LAN IP goes stale when the phone roams to
         // another network. Prefer the current address the account device list
-        // reports for the same phone before dialing the old one.
-        if dev.transport == .lan, cloudAccountActive, let name = device.name,
+        // reports for the same phone before dialing the old one. A Tailscale
+        // session stays on Tailscale: the list only ever carries the phone's Wi-Fi
+        // address, which is what this route exists to do without.
+        if dev.transport == .lan, dev.remote != true, cloudAccountActive, let name = device.name,
            let cur = cloudPhones.first(where: { $0.name == name && !$0.ip.isEmpty }),
            cur.ip != device.ip {
             log("auto-reconnect: 设备列表新地址 \(cur.ip)(旧 \(device.ip ?? "?"))")
@@ -929,7 +985,11 @@ final class AppModel: ObservableObject {
         if !info.name.isEmpty { dev.name = info.name }
         if let ref = lastDevice {
             dev.lastTransport = ref.transport
-            if ref.transport == .lan, let ip = ref.ip, !ip.isEmpty { dev.lastIP = ip }
+            // The Tailscale address has its own slot; letting it into `lastIP`
+            // would make the Wi-Fi leg dial it and the fallback lose its point.
+            if ref.transport == .lan, ref.remote != true, let ip = ref.ip, !ip.isEmpty {
+                dev.lastIP = ip
+            }
         }
         knownDevices.removeAll { $0.id == dev.id }
         knownDevices.insert(dev, at: 0)
@@ -1056,9 +1116,12 @@ final class AppModel: ObservableObject {
             // Sanitize once, up front: nothing below (menu status, notification,
             // give-up message) should ever see the raw core/adb text.
             if case .failed(let raw) = st { st = .failed(self.friendlyConnectError(raw)) }
+            // An auto-connect whose Wi-Fi leg just failed may still have the
+            // Tailscale leg to go — that is not a failure the user needs to see.
+            if case .failed = st, self.fallBackToTailscale() { return }
             // An auto-connect that got this far already tried the cable. Whatever
-            // the Wi-Fi leg says on its own ("no answer from …:10191"), the thing
-            // the user needs told is that neither route worked.
+            // the last leg says on its own ("no answer from …:10191"), the thing
+            // the user needs told is that no route worked.
             if case .failed = st, let note = self.autoConnectFailure {
                 st = .failed(note)
             }
@@ -1066,6 +1129,7 @@ final class AppModel: ObservableObject {
             case .connected, .failed, .disconnected:
                 self.autoConnectID = nil
                 self.autoConnectFailure = nil
+                self.autoConnectTailscale = nil
             default: break
             }
             // A failure inside a reconnect sequence isn't a UI event — the next

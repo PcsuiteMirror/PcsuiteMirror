@@ -199,8 +199,10 @@ final class SessionController {
                     // connectType=1 only when there is none. The two are not
                     // interchangeable to the phone: connectType=1 is the FARAWAYWLAN
                     // (remote) path, so defaulting to it on our own LAN is wrong. An
-                    // explicit "connect without a seed" preference still forces it.
-                    let remote = Store.lanUseRemote
+                    // explicit "connect without a seed" preference still forces it,
+                    // and so does a ref that says so (a Tailscale address — the
+                    // phone has no seed keyed by that address, see DeviceRef.remote).
+                    let remote = device.remote ?? Store.lanUseRemote
                     log("LAN connect \(ip) (connectType=\(remote ? "1" : "2, 无 seed 时回落 1"))")
                     s = try pcsuite_connect_lan(ip, remote)
                 }

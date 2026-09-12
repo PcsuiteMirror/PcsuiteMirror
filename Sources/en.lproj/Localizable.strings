@@ -17,6 +17,12 @@
 "Can't reach %@ — no cable, and no Wi-Fi address is known for it" = "Can't reach %@ — no cable, and no Wi-Fi address is known for it";
 "Can't reach %@ over USB or Wi-Fi — check it's on the same network and awake" = "Can't reach %@ over USB or Wi-Fi — check it's on the same network and awake";
 "Can't reach %@ — allow USB debugging on the phone, or put it on this network" = "Can't reach %@ — allow USB debugging on the phone, or put it on this network";
+"Can't reach %@ over USB, Wi-Fi or Tailscale — check it's awake and on a network" = "Can't reach %@ over USB, Wi-Fi or Tailscale — check it's awake and on a network";
+"Set Tailscale address…" = "Set Tailscale address…";
+"Change Tailscale address…" = "Change Tailscale address…";
+"Tailscale address" = "Tailscale address";
+"Enter the phone's Tailscale address. It is tried last, when the cable and Wi-Fi both fail. Leave blank to remove it." = "Enter the phone's Tailscale address. It is tried last, when the cable and Wi-Fi both fail. Leave blank to remove it.";
+"Save" = "Save";
 "New Connect" = "New Connect";
 "Pair new device (QR)…" = "Pair new device (QR)…";
 "Forget this device" = "Forget this device";

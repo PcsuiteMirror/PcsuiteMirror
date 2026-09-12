@@ -15,6 +15,12 @@ struct DeviceRef: Codable, Equatable {
     /// Phone display name when known (e.g. "iQOO 15"), used for nicer labels —
     /// populated by QR pairing. Optional → backward-compatible with stored data.
     var name: String? = nil
+    /// Force the seedless connectType=1 (the phone's "far-away WLAN" path) for
+    /// this address, regardless of the Wi-Fi preference. Set for a Tailscale
+    /// address: the phone keys its pairing seeds by *its own* address on the
+    /// connection, and it has none for its Tailscale one, so connectType=2 can
+    /// never verify there. nil = decide as usual. Optional → old stored refs load.
+    var remote: Bool? = nil
 
     /// Short label for the menu, e.g. "iQOO 15", "USB", or "192.168.1.42".
     var displayName: String {
@@ -34,16 +40,31 @@ struct KnownDevice: Codable, Equatable, Identifiable {
     var name: String                // display name, e.g. "iQOO 15"
     var lastIP: String?             // last LAN IP seen (for "Connect over Wi-Fi")
     var lastTransport: Transport?   // how it was last reached
+    /// The phone's Tailscale address, typed in by the user: the route of last
+    /// resort when neither the cable nor any Wi-Fi address reaches it (the phone
+    /// is on another network). Never learned automatically — a Tailscale address
+    /// only ever comes from the user. Optional → old stored rosters load.
+    var tailscaleIP: String? = nil
 
     /// Menu label: the name, falling back to the id if unnamed.
     var menuLabel: String { name.isEmpty ? id : name }
+
+    /// The Tailscale address, or nil when none is set (blank counts as none).
+    var tailscale: String? {
+        guard let ts = tailscaleIP?.trimmingCharacters(in: .whitespacesAndNewlines), !ts.isEmpty else {
+            return nil
+        }
+        return ts
+    }
 
     /// Whether a (transient) connect target plausibly refers to this device —
     /// used to highlight the active device in the brief window before `/base-info`
     /// returns the real id.
     func matches(_ ref: DeviceRef) -> Bool {
         if let n = ref.name, !n.isEmpty, n == name { return true }
-        if ref.transport == .lan, let ip = ref.ip, !ip.isEmpty, ip == lastIP { return true }
+        if ref.transport == .lan, let ip = ref.ip, !ip.isEmpty, ip == lastIP || ip == tailscale {
+            return true
+        }
         return false
     }
 }
