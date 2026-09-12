@@ -844,11 +844,16 @@ final class SessionController {
     /// in, switching to account mode, waking, connecting a phone.
     func pollCloudTransfersNow() { pcsuite_cloud_recv_poll_now() }
 
-    /// Background re-check period for 云传输. Deliberately lazy: the official
-    /// client does not poll at all (it checks when its transfer-history page is
-    /// opened, or when its push daemon pokes it), and files sit on the relay for
-    /// 72 hours, so the cost of being a few minutes late is nil.
-    static let cloudPollInterval: Double = 300
+    /// Background re-check period for 云传输.
+    ///
+    /// The official client does not poll at all — it checks when its
+    /// transfer-history page is opened, or when its push daemon pokes it. We
+    /// have no push channel yet, so polling is the whole mechanism, and the
+    /// interval is what the user experiences as "how long until the file shows
+    /// up". 20s keeps that close to instant; one small signed request per tick
+    /// is cheap enough that the laziness the relay would tolerate isn't worth
+    /// the wait.
+    static let cloudPollInterval: Double = 20
 
     /// Park a thread on a file-transfer event source until it returns "" (stopped),
     /// decoding each `{"type","files","dir","error","source"}` event onto
