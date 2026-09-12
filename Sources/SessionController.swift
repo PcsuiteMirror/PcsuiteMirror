@@ -68,10 +68,11 @@ final class SessionController {
     /// action (it has the mirror window and settings) and **must** finish by calling
     /// `replyConnectCenter` with the same msgId — the phone's button waits for it.
     var onConnectCenterRequest: ((String, String) -> Void)?
-    /// A phone→PC「快传」batch event: `(type, files, dir, error)` where type is
-    /// "started" / "done" / "failed" / "cancelled". Delivered on the main queue
-    /// while connected.
-    var onFileTransfer: ((String, [String], String, String) -> Void)?
+    /// A phone→PC file-receive event: `(type, files, dir, error, source)` where
+    /// type is "started" / "done" / "failed" / "cancelled". `source` is "cloud"
+    /// for 云传输 and "" for the two LAN paths (快传 / 互传), which the phone's UI
+    /// does not distinguish either. Delivered on the main queue.
+    var onFileTransfer: ((String, [String], String, String, String) -> Void)?
     /// Result of a `pushFiles` call: `(phoneDir, nil)` on success, `(nil, error)`
     /// on failure. Delivered on the main queue.
     var onPushResult: ((String?, String?) -> Void)?
@@ -823,23 +824,51 @@ final class SessionController {
         runFileTransferLoop(name: "share-recv-loop", done: nil) { pcsuite_share_recv_next_event().toString() }
     }
 
+    /// App-lifetime 云传输 (cloud transfer) receiver: the phone uploaded the files
+    /// to vivo's relay and this Mac downloads them, which is the only one of the
+    /// three receive paths that works with the two on different networks. Needs
+    /// account mode and a signed-in account; otherwise the poll loop runs but
+    /// makes no request, so it is safe to arm unconditionally at launch.
+    ///
+    /// Events feed the same `onFileTransfer` as the LAN paths, tagged
+    /// `source == "cloud"`. Call once at launch.
+    func startCloudReceiver() {
+        do { try pcsuite_cloud_recv_start(Self.fileSaveDir, Self.cloudPollInterval) }
+        catch { log("云传输 receiver: \(ffiMessage(error))"); return }
+        log("云传输 receiver armed (每 \(Int(Self.cloudPollInterval))s) → \(Self.fileSaveDir)")
+        runFileTransferLoop(name: "cloud-recv-loop", done: nil) { pcsuite_cloud_recv_next_event().toString() }
+    }
+
+    /// Check the relay now rather than waiting out the interval. Worth calling
+    /// when something makes a pending transfer likely or newly visible: signing
+    /// in, switching to account mode, waking, connecting a phone.
+    func pollCloudTransfersNow() { pcsuite_cloud_recv_poll_now() }
+
+    /// Background re-check period for 云传输. Deliberately lazy: the official
+    /// client does not poll at all (it checks when its transfer-history page is
+    /// opened, or when its push daemon pokes it), and files sit on the relay for
+    /// 72 hours, so the cost of being a few minutes late is nil.
+    static let cloudPollInterval: Double = 300
+
     /// Park a thread on a file-transfer event source until it returns "" (stopped),
-    /// decoding each `{"type","files","dir","error"}` event onto `onFileTransfer`.
+    /// decoding each `{"type","files","dir","error","source"}` event onto
+    /// `onFileTransfer`.
     private func runFileTransferLoop(name: String, done: DispatchSemaphore?,
                                      next: @escaping () -> String) {
         let t = Thread { [weak self] in
             while true {
                 let raw = next()
                 if raw.isEmpty { break }            // stopped or session ended
-                var type = "", files: [String] = [], dir = "", error = ""
+                var type = "", files: [String] = [], dir = "", error = "", source = ""
                 if let data = raw.data(using: .utf8),
                    let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     type = obj["type"] as? String ?? ""
                     files = obj["files"] as? [String] ?? []
                     dir = obj["dir"] as? String ?? ""
                     error = obj["error"] as? String ?? ""
+                    source = obj["source"] as? String ?? ""
                 }
-                self?.emit { self?.onFileTransfer?(type, files, dir, error) }
+                self?.emit { self?.onFileTransfer?(type, files, dir, error, source) }
             }
             done?.signal()
         }

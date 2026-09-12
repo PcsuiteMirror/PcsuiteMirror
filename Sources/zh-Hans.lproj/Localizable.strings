@@ -127,6 +127,9 @@
 "Send failed" = "发送失败";
 "Receiving %lld file(s)…" = "正在接收 %lld 个文件…";
 "Receiving via EasyShare…" = "正在通过互传接收…";
+"Downloading %lld file(s) from cloud transfer…" = "正在从云传输下载 %lld 个文件…";
+"Cloud transfer: received %lld file(s) → %@" = "云传输：已接收 %lld 个文件 → %@";
+"Cloud transfer failed: %@" = "云传输接收失败：%@";
 "Received %lld file(s) → %@" = "已接收 %lld 个文件 → %@";
 "Files received" = "收到文件";
 "%lld file(s) saved to %@" = "%lld 个文件已保存到 %@";

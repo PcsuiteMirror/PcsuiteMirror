@@ -288,6 +288,11 @@ extension Notification.Name {
 func applyAccountToCore() {
     pcsuite_set_mode(Store.connectionMode.coreValue)
     if Store.connectionMode == .vivoAccount && VivoAccount.isSignedIn {
+        // "cn" is the account's region, not the user's location. Besides the
+        // connection center it now also picks the 云传输 relay host, and picking
+        // the wrong one comes back as "token expired" rather than anything that
+        // points at the region — so an overseas account would need this wired to
+        // a real value before cloud transfer works for it.
         pcsuite_cloud_set_account(VivoAccount.openID, VivoAccount.token, "cn")
     } else {
         pcsuite_cloud_set_account("", "", "")

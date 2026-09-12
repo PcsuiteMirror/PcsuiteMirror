@@ -101,6 +101,9 @@
 "Send failed" = "Send failed";
 "Receiving %lld file(s)…" = "Receiving %lld file(s)…";
 "Receiving via EasyShare…" = "Receiving via EasyShare…";
+"Downloading %lld file(s) from cloud transfer…" = "Downloading %lld file(s) from cloud transfer…";
+"Cloud transfer: received %lld file(s) → %@" = "Cloud transfer: received %lld file(s) → %@";
+"Cloud transfer failed: %@" = "Cloud transfer failed: %@";
 "Received %lld file(s) → %@" = "Received %lld file(s) → %@";
 "Files received" = "Files received";
 "%lld file(s) saved to %@" = "%lld file(s) saved to %@";

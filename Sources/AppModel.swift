@@ -173,6 +173,10 @@ final class AppModel: ObservableObject {
         // session or not — arm it for the app's lifetime (after wire(), so its
         // events reach onFileTransfer).
         controller.startShareReceiver()
+        // 云传输 (cloud transfer): files the phone uploaded to vivo's relay. No
+        // socket of its own — it polls, and does nothing at all unless the user
+        // is in account mode and signed in, so arming it here is unconditional.
+        controller.startCloudReceiver()
         // The account panel owns sign-in / mode; it tells us when either changes
         // so the phone list starts, stops, or refreshes accordingly.
         NotificationCenter.default.addObserver(
@@ -315,6 +319,10 @@ final class AppModel: ObservableObject {
             return
         }
         refreshCloudPhones()
+        // Signing in (or switching into account mode) is exactly when a transfer
+        // may already be waiting on the relay — don't make the user wait out the
+        // poll interval to find out.
+        controller.pollCloudTransfersNow()
         // Default run-loop mode on purpose: the timer then waits while the menu
         // is open rather than rebuilding it under the pointer.
         cloudRefreshTimer = Timer.scheduledTimer(withTimeInterval: cloudRefreshInterval, repeats: true) {
@@ -1108,22 +1116,32 @@ final class AppModel: ObservableObject {
                 Notifier.postFileSendFailed(error)
             }
         }
-        controller.onFileTransfer = { [weak self] type, files, dir, error in
+        controller.onFileTransfer = { [weak self] type, files, dir, error, source in
             guard let self else { return }
+            let fromCloud = source == "cloud"
             switch type {
             case "started":
                 // 互传 (EasyShare) 批次在 10191 connect 帧时 started，文件名未知
                 // （files 为空）；快传批次 files 至少一个。
-                if files.isEmpty {
+                if fromCloud {
+                    self.noteFileTransfer(String(format: L("Downloading %lld file(s) from cloud transfer…"),
+                                                 files.count), sticky: true)
+                } else if files.isEmpty {
                     self.noteFileTransfer(L("Receiving via EasyShare…"), sticky: true)
                 } else {
                     self.noteFileTransfer(String(format: L("Receiving %lld file(s)…"), files.count), sticky: true)
                 }
             case "done":
-                self.noteFileTransfer(String(format: L("Received %lld file(s) → %@"), files.count, dir))
+                let text = fromCloud
+                    ? String(format: L("Cloud transfer: received %lld file(s) → %@"), files.count, dir)
+                    : String(format: L("Received %lld file(s) → %@"), files.count, dir)
+                self.noteFileTransfer(text)
                 Notifier.postFilesReceived(count: files.count, dir: dir)
             case "failed":
-                self.noteFileTransfer(String(format: L("Receive failed: %@"), error))
+                let text = fromCloud
+                    ? String(format: L("Cloud transfer failed: %@"), error)
+                    : String(format: L("Receive failed: %@"), error)
+                self.noteFileTransfer(text)
                 Notifier.postFileReceiveFailed(error)
             case "cancelled":
                 self.noteFileTransfer(L("Transfer cancelled by phone"))
