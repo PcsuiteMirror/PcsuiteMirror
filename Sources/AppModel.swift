@@ -169,6 +169,10 @@ final class AppModel: ObservableObject {
         lastDevice = Store.lastDevice
         knownDevices = Store.knownDevices
         wire()
+        // 互传「我的设备」→ this Mac works only while something listens on :10191,
+        // session or not — arm it for the app's lifetime (after wire(), so its
+        // events reach onFileTransfer).
+        controller.startShareReceiver()
         // The account panel owns sign-in / mode; it tells us when either changes
         // so the phone list starts, stops, or refreshes accordingly.
         NotificationCenter.default.addObserver(

@@ -807,9 +807,29 @@ final class SessionController {
     private func startFileTransferLoop(_ s: PcSession) {
         let done = DispatchSemaphore(value: 0)
         fileTransDone = done
+        runFileTransferLoop(name: "filetrans-loop", done: done) { s.next_file_transfer_event().toString() }
+    }
+
+    /// App-lifetime 互传 (EasyShare) receiver on :10191. The phone's 互传「我的设备」
+    /// entry connects to *this Mac's* 10191 whenever there is no pcsuite session
+    /// (with one, the phone hands the file to pcsuite and it arrives as 快传 on
+    /// that session instead), so — like the official VivoConnService — the
+    /// listener has to be up from launch, not only while connected. Events feed
+    /// the same `onFileTransfer` as the per-session receiver. Call once at launch.
+    func startShareReceiver() {
+        do { try pcsuite_share_recv_start(Self.fileSaveDir) }
+        catch { log("互传 listener: \(ffiMessage(error))"); return }
+        log("互传 listener armed on :10191 → \(Self.fileSaveDir)")
+        runFileTransferLoop(name: "share-recv-loop", done: nil) { pcsuite_share_recv_next_event().toString() }
+    }
+
+    /// Park a thread on a file-transfer event source until it returns "" (stopped),
+    /// decoding each `{"type","files","dir","error"}` event onto `onFileTransfer`.
+    private func runFileTransferLoop(name: String, done: DispatchSemaphore?,
+                                     next: @escaping () -> String) {
         let t = Thread { [weak self] in
             while true {
-                let raw = s.next_file_transfer_event().toString()
+                let raw = next()
                 if raw.isEmpty { break }            // stopped or session ended
                 var type = "", files: [String] = [], dir = "", error = ""
                 if let data = raw.data(using: .utf8),
@@ -821,9 +841,9 @@ final class SessionController {
                 }
                 self?.emit { self?.onFileTransfer?(type, files, dir, error) }
             }
-            done.signal()
+            done?.signal()
         }
-        t.name = "filetrans-loop"
+        t.name = name
         t.start()
     }
 
