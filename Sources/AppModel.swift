@@ -114,6 +114,11 @@ final class AppModel: ObservableObject {
     /// The phone IP the current hold targets, so a roamed address restarts it.
     private var presencePhoneIP: String = ""
     private var presenceStatusTimer: Timer?
+    /// This session came from the phone tapping 「连接」, so it rides on the held 10191
+    /// connection and presence must keep holding it (see `syncPresenceHold`).
+    private var phoneAskSession = false
+    /// The phone is still waiting for the outcome of the connect it asked for.
+    private var phoneAskAwaitingReport = false
 
     private let controller = SessionController()
     private lazy var mirror = MirrorWindowManager(model: self)
@@ -352,18 +357,20 @@ final class AppModel: ObservableObject {
     /// to the account phone while signed in + `holdPresence`, drop it otherwise,
     /// and restart it when the phone's IP changes.
     private func syncPresenceHold() {
-        // Hold presence (10191) only while idle. A live/forming session runs its
-        // own 10191 ConnectFlow, and the phone accepts one 10191 per PC — so
-        // presence must step aside during connect. When the phone itself taps
-        // 「连接」, the presence task hands its token to the session and ends
-        // (PresenceOutcome.connectRequested), then this resumes it on disconnect.
+        // The held 10191 connection *is* how the phone sees this Mac, so a session the
+        // phone asked for keeps it: presence turns that same connection into the formal
+        // connect and hands us its token (no second 10191, which the phone answers by
+        // closing the held one — and the device drops to 「未发现」).
+        //
+        // A connect *we* start is still the old path (`pcsuite_connect_lan` runs its own
+        // ConnectFlow on a new connection), so presence steps aside for those.
         let sessionActive: Bool = {
             switch state {
             case .disconnected, .failed: return false
             default: return true
             }
         }()
-        let wanted = cloudAccountActive && holdPresence && !sessionActive
+        let wanted = cloudAccountActive && holdPresence && !(sessionActive && !phoneAskSession)
         let ip = cloudPhones.first(where: { !$0.ip.isEmpty })?.ip ?? ""
         guard wanted, !ip.isEmpty else {
             if cloudPresence != nil { stopPresenceHold() }
@@ -387,26 +394,41 @@ final class AppModel: ObservableObject {
             guard let self, let p = self.cloudPresence else { return }
             let s = p.status().toString()
             if s != self.presenceStatus { self.presenceStatus = s }
-            // The phone tapped 「连接」 → establish the session (connect only; the
-            // mirror window stays user-initiated, matching the phone's semantics).
-            if p.take_connect_request() { self.handlePhoneConnectRequest() }
+            // The phone tapped 「连接」 → establish the session with the token presence
+            // registered for it (connect only; the mirror window stays user-initiated,
+            // matching the phone's semantics).
+            let token = p.take_connect_request().toString()
+            if !token.isEmpty { self.handlePhoneConnectRequest(token: token) }
         }
     }
 
     /// React to the phone tapping 「连接」 while we hold presence: open the control
-    /// session to it (no mirror). No-op if a session is already up.
-    private func handlePhoneConnectRequest() {
+    /// session with the token presence registered on the held connection (no mirror).
+    /// No-op if a session is already up.
+    ///
+    /// The hold stays up throughout — it carries the `bytes:[25]`/`[27]` answers the
+    /// phone is waiting for, and it is what the phone shows as this Mac's state. Once
+    /// the session resolves we report the outcome so presence can send `[27]`.
+    private func handlePhoneConnectRequest(token: String) {
         guard !isConnected, !presencePhoneIP.isEmpty else { return }
         let ip = presencePhoneIP
         log("presence: 手机请求连接 → 建立会话 \(ip)")
         let name = cloudPhones.first(where: { $0.ip == ip })?.name ?? L("Phone")
-        // Stop holding presence first: presence + a live connect both open a 10191
-        // ConnectFlow and the phone allows only one, so they'd knock each other's
-        // 10380 session out. The connect takes over; disconnecting resumes presence.
-        stopPresenceHold()
+        phoneAskSession = true          // keep the hold: this session rides on it
+        phoneAskAwaitingReport = true
         cancelReconnect()   // drop any stale auto-reconnect (e.g. to an old-network IP)
         controller.connect(DeviceRef(transport: .lan, ip: ip, name: name),
-                           features: features, reconnect: false)
+                           features: features, reconnect: false, preauthToken: token)
+    }
+
+    /// Tell the phone how the session it asked for went (presence sends `bytes:[27]`
+    /// `{retCode,retMsg}` on the connection it is still holding). The phone gives up
+    /// after ~5s, so this runs from the first state change that settles the attempt.
+    private func reportPhoneAskResult(_ retCode: Int64, _ message: String) {
+        guard phoneAskAwaitingReport else { return }
+        phoneAskAwaitingReport = false
+        log("presence: 回报手机 retCode=\(retCode) \(message)")
+        cloudPresence?.report_connect_result(retCode, message)
     }
 
     private func stopPresenceHold() {
@@ -859,9 +881,19 @@ final class AppModel: ObservableObject {
             case .connecting, .reconnecting: break
             default: QRPairingWindowController.shared.close()
             }
-            // Keep the 10191 presence in step with the session: pause while
-            // connecting (its own 10191 register would clash), hold again once
-            // connected (so the phone keeps showing this Mac online, not greyed).
+            // Answer a phone-initiated connect as soon as the attempt settles — the
+            // phone is waiting on the held connection for the outcome.
+            switch st {
+            case .connected: self.reportPhoneAskResult(0, "success")
+            case .failed(let m): self.reportPhoneAskResult(1, m)
+            case .disconnected:
+                self.reportPhoneAskResult(1, "disconnected")
+                self.phoneAskSession = false
+            default: break
+            }
+            // Keep the 10191 presence in step with the session: a session the phone
+            // asked for rides on the held connection (keep it); one we started runs its
+            // own 10191, so presence steps aside for that one.
             self.syncPresenceHold()
             switch st {
             case .connected(let d):

@@ -161,7 +161,13 @@ final class SessionController {
 
     // MARK: - Connect / disconnect
 
-    func connect(_ device: DeviceRef, features: ConnectFeatures, reconnect: Bool) {
+    /// `preauthToken` — a token the phone has already accepted, handed over by the
+    /// presence hold after the phone itself tapped 「连接」. With it we open 10380
+    /// directly instead of running our own ConnectFlow: a second 10191 connection makes
+    /// the phone close the one presence is holding, and that connection is what keeps
+    /// this Mac visible in the phone's connection center.
+    func connect(_ device: DeviceRef, features: ConnectFeatures, reconnect: Bool,
+                 preauthToken: String? = nil) {
         let gen = beginAttempt()
         queue.async { [self] in
             guard !isStale(gen) else { return }    // cancelled before we even started
@@ -172,6 +178,10 @@ final class SessionController {
                 applyIdentityToCore()          // openID (for the sign + clipboard) + seeds
                 switch device.transport {
                 case .usb: s = try pcsuite_connect_usb()
+                case .lan where (preauthToken?.isEmpty == false):
+                    let ip = device.ip ?? ""
+                    log("LAN connect \(ip) (复用 presence 已注册的 token, 不另开 10191)")
+                    s = try pcsuite_connect_lan_token(ip, preauthToken!)
                 case .lan:
                     let ip = device.ip ?? ""
                     // Ask for the nearby WLAN connect (connectType=2) and let the core
