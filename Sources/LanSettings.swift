@@ -110,12 +110,13 @@ struct IdentityTab: View {
 /// The tabs, in toolbar order. Each carries the SF Symbol and the height its
 /// content wants — the window resizes to the selected tab, Preferences-style.
 enum PreferencesTab: Int, CaseIterable {
-    case general, mirroring, identity, account
+    case general, mirroring, notifications, identity, account
 
     var title: String {
         switch self {
         case .general: return L("General")
         case .mirroring: return L("Mirroring")
+        case .notifications: return L("Notifications")
         case .identity: return L("Identity")
         case .account: return L("Account")
         }
@@ -124,14 +125,16 @@ enum PreferencesTab: Int, CaseIterable {
         switch self {
         case .general: return "gearshape"
         case .mirroring: return "rectangle.on.rectangle"
+        case .notifications: return "bell.badge"
         case .identity: return "person.text.rectangle"
         case .account: return "person.crop.circle"
         }
     }
     var height: CGFloat {
         switch self {
-        case .general: return 450
+        case .general: return 420
         case .mirroring: return 470
+        case .notifications: return 300
         case .identity: return 540
         case .account: return 580
         }
@@ -141,6 +144,7 @@ enum PreferencesTab: Int, CaseIterable {
         switch self {
         case .general: GeneralTab(model: model)
         case .mirroring: MirroringTab(model: model)
+        case .notifications: NotificationsTab(model: model)
         case .identity: IdentityTab()
         case .account: AccountTab(appModel: model)
         }
@@ -168,7 +172,6 @@ struct GeneralTab: View {
                 }
                 .disabled(!model.clipboardEnabled)
                 Toggle(L("Verify-code relay"), isOn: $model.verifyEnabled)
-                Toggle(L("Notification relay"), isOn: $model.notifyEnabled)
             } header: {
                 Text(L("Sync"))
             }
@@ -194,6 +197,29 @@ struct GeneralTab: View {
         alert.addButton(withTitle: L("Cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         model.resetAllSettings()
+    }
+}
+
+/// Which events put a banner on this Mac. The phone-notification switch doubles
+/// as the relay feature toggle (the phone only forwards them while it's on) — it
+/// lives here rather than under Sync because a banner is all it produces.
+/// Failures are not switchable: they are always shown.
+struct NotificationsTab: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(L("Device connected"), isOn: $model.notifyOnConnect)
+                Toggle(L("Files sent or received"), isOn: $model.notifyOnFileTransfer)
+                Toggle(L("Phone notifications"), isOn: $model.notifyEnabled)
+            } header: {
+                Text(L("Show a notification for"))
+            } footer: {
+                Text(L("Failures — a connect that didn't work, a transfer that didn't finish — are always reported. Phone notifications are forwarded by the phone only while that switch is on."))
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 

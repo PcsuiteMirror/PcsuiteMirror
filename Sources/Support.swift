@@ -88,75 +88,73 @@ enum Pasteboard {
     }
 }
 
+/// Native macOS banners. Which of the success ones actually post is the caller's
+/// call (see the `notifyOn*` switches on `AppModel`); the failure ones are always
+/// worth showing — the menu dropdown is usually closed when they happen, so the
+/// inline status text alone would go unseen.
 enum Notifier {
     static func requestAuth() {
         UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    /// Notify that a user-initiated connect attempt failed (the menu dropdown may
-    /// be closed, so the inline status text would go unseen).
-    static func postConnectFailure(_ message: String) {
+    /// One fire-and-forget banner: no trigger, throwaway id, default sound.
+    private static func post(title: String, subtitle: String = "", body: String) {
         let content = UNMutableNotificationContent()
-        content.title = L("Connection failed")
-        content.body = message
-        content.sound = .default
-        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
-    }
-
-    /// Post a local notification announcing a received SMS verify code.
-    static func postCode(_ code: String) {
-        let content = UNMutableNotificationContent()
-        content.title = L("Verification code")
-        content.body = String(format: L("%@ copied to clipboard"), code)
-        content.sound = .default
-        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
-    }
-
-    /// Mirror a phone notification to a native macOS banner. `title` is the
-    /// notification's own title (falls back to the app name); `app` is shown as the
-    /// subtitle so the source is clear.
-    static func postPhoneNotification(app: String, title: String, body: String) {
-        let content = UNMutableNotificationContent()
-        content.title = title.isEmpty ? app : title
-        if !app.isEmpty && content.title != app { content.subtitle = app }
+        content.title = title
+        if !subtitle.isEmpty { content.subtitle = subtitle }
         content.body = body
         content.sound = .default
         let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
     }
 
-    /// Announce a phone→PC「快传」batch that landed on disk.
-    static func postFilesReceived(count: Int, dir: String) {
-        let content = UNMutableNotificationContent()
-        content.title = L("Files received")
-        content.body = String(format: L("%lld file(s) saved to %@"), count, dir)
-        content.sound = .default
-        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
+    /// A session came up. Names the phone and the route ("iQOO 15 · USB"); a
+    /// phone we have no name for is shown as whatever the menu shows it as.
+    static func postConnected(_ device: DeviceRef) {
+        let transport = device.transport == .usb ? L("via USB") : L("via Wi-Fi")
+        let named = !(device.name ?? "").isEmpty
+        post(title: L("Connected"),
+             body: named ? "\(device.displayName) · \(transport)" : device.displayName)
     }
 
-    /// A phone→PC「快传」batch could not be pulled/written.
+    /// Notify that a user-initiated connect attempt failed.
+    static func postConnectFailure(_ message: String) {
+        post(title: L("Connection failed"), body: message)
+    }
+
+    /// Post a local notification announcing a received SMS verify code.
+    static func postCode(_ code: String) {
+        post(title: L("Verification code"), body: String(format: L("%@ copied to clipboard"), code))
+    }
+
+    /// Mirror a phone notification to a native macOS banner. `title` is the
+    /// notification's own title (falls back to the app name); `app` is shown as the
+    /// subtitle so the source is clear.
+    static func postPhoneNotification(app: String, title: String, body: String) {
+        let shown = title.isEmpty ? app : title
+        post(title: shown, subtitle: shown == app ? "" : app, body: body)
+    }
+
+    /// A PC→phone push landed on the phone.
+    static func postFilesSent(count: Int, dir: String) {
+        post(title: L("Files sent"), body: String(format: L("%lld file(s) sent to %@"), count, dir))
+    }
+
+    /// Announce a phone→PC batch (快传 / 互传 / 云传输) that landed on disk.
+    static func postFilesReceived(count: Int, dir: String) {
+        post(title: L("Files received"), body: String(format: L("%lld file(s) saved to %@"), count, dir))
+    }
+
+    /// A phone→PC batch could not be pulled/written.
     static func postFileReceiveFailed(_ error: String) {
-        let content = UNMutableNotificationContent()
-        content.title = L("File transfer failed")
-        content.body = error
-        content.sound = .default
-        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
+        post(title: L("File transfer failed"), body: error)
     }
 
     /// A PC→phone push failed (the drop target may be closed by the time a long
-    /// upload errors out, so the inline status note would go unseen).
+    /// upload errors out).
     static func postFileSendFailed(_ error: String) {
-        let content = UNMutableNotificationContent()
-        content.title = L("Send failed")
-        content.body = error
-        content.sound = .default
-        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
+        post(title: L("Send failed"), body: error)
     }
 }
 

@@ -55,6 +55,10 @@ final class AppModel: ObservableObject {
     @Published var clipboardDirection: ClipboardDirection { didSet { Store.clipboardDirection = clipboardDirection; applyClipboardLive() } }
     @Published var verifyEnabled: Bool { didSet { Store.verifyEnabled = verifyEnabled; if isConnected { controller.setVerify(enabled: verifyEnabled) } } }
     @Published var notifyEnabled: Bool { didSet { Store.notifyEnabled = notifyEnabled; if isConnected { controller.setNotify(enabled: notifyEnabled) } } }
+    // Which of this Mac's own banners to show (see `Notifier`). Read at the moment
+    // an event lands, so a change applies to the next one straight away.
+    @Published var notifyOnConnect: Bool { didSet { Store.notifyOnConnect = notifyOnConnect } }
+    @Published var notifyOnFileTransfer: Bool { didSet { Store.notifyOnFileTransfer = notifyOnFileTransfer } }
     /// Show the FPS / latency HUD over the mirror picture.
     @Published var showStats: Bool { didSet { Store.showStats = showStats } }
     /// Open at login. Not in the store: the OS holds it (see `LaunchAtLogin`), so
@@ -159,6 +163,8 @@ final class AppModel: ObservableObject {
         clipboardDirection = Store.clipboardDirection
         verifyEnabled = Store.verifyEnabled
         notifyEnabled = Store.notifyEnabled
+        notifyOnConnect = Store.notifyOnConnect
+        notifyOnFileTransfer = Store.notifyOnFileTransfer
         showStats = Store.showStats
         launchAtLogin = LaunchAtLogin.isEnabled
         lanIP = Store.lanIP
@@ -686,6 +692,8 @@ final class AppModel: ObservableObject {
         clipboardDirection = Store.clipboardDirection
         verifyEnabled = Store.verifyEnabled
         notifyEnabled = Store.notifyEnabled
+        notifyOnConnect = Store.notifyOnConnect
+        notifyOnFileTransfer = Store.notifyOnFileTransfer
         showStats = Store.showStats
         launchAtLogin = false          // held by the OS, not the store; off is the default
         lanIP = Store.lanIP
@@ -1100,6 +1108,9 @@ final class AppModel: ObservableObject {
                 self.activeDeviceId = self.knownDevices.first { $0.matches(d) }?.id
                 if self.reconnectDevice != nil { log("auto-reconnect succeeded") }
                 self.cancelReconnect()
+                // Every way in ends here — a click in the menu, the auto-reconnect,
+                // the phone's own 「连接」 — and the menu is closed for most of them.
+                if self.notifyOnConnect { Notifier.postConnected(d) }
                 // Resume mirroring if the window is still open after a recovered drop.
                 if self.mirror.isShowing && !self.mirroring {
                     self.controller.startMirror(settings: self.mirrorSettings)
@@ -1170,7 +1181,10 @@ final class AppModel: ObservableObject {
             Pasteboard.copy(code)
             Notifier.postCode(code)
         }
-        controller.onNotification = { app, title, content in
+        // The phone stops sending once the relay is switched off; this guard only
+        // catches one already in flight at that moment.
+        controller.onNotification = { [weak self] app, title, content in
+            guard self?.notifyEnabled == true else { return }
             Notifier.postPhoneNotification(app: app, title: title, body: content)
         }
         // The phone's own function buttons on this Mac's card in its connection center.
@@ -1191,10 +1205,11 @@ final class AppModel: ObservableObject {
                 self.controller.replyConnectCenter(name, msgId, -1, "unsupported")
             }
         }
-        controller.onPushResult = { [weak self] dir, error in
+        controller.onPushResult = { [weak self] count, dir, error in
             guard let self else { return }
             if let dir {
                 self.noteFileTransfer(String(format: L("Sent → %@"), dir))
+                if self.notifyOnFileTransfer { Notifier.postFilesSent(count: count, dir: dir) }
             } else if let error {
                 self.noteFileTransfer(String(format: L("Send failed: %@"), error))
                 Notifier.postFileSendFailed(error)
@@ -1220,7 +1235,7 @@ final class AppModel: ObservableObject {
                     ? String(format: L("Cloud transfer: received %lld file(s) → %@"), files.count, dir)
                     : String(format: L("Received %lld file(s) → %@"), files.count, dir)
                 self.noteFileTransfer(text)
-                Notifier.postFilesReceived(count: files.count, dir: dir)
+                if self.notifyOnFileTransfer { Notifier.postFilesReceived(count: files.count, dir: dir) }
             case "failed":
                 let text = fromCloud
                     ? String(format: L("Cloud transfer failed: %@"), error)

@@ -73,9 +73,10 @@ final class SessionController {
     /// for 云传输 and "" for the two LAN paths (快传 / 互传), which the phone's UI
     /// does not distinguish either. Delivered on the main queue.
     var onFileTransfer: ((String, [String], String, String, String) -> Void)?
-    /// Result of a `pushFiles` call: `(phoneDir, nil)` on success, `(nil, error)`
-    /// on failure. Delivered on the main queue.
-    var onPushResult: ((String?, String?) -> Void)?
+    /// Result of a `pushFiles` call: `(count, phoneDir, nil)` on success, `(count,
+    /// nil, error)` on failure, where `count` is how many files the push carried
+    /// (0 when it never started). Delivered on the main queue.
+    var onPushResult: ((_ count: Int, _ phoneDir: String?, _ error: String?) -> Void)?
     /// Phone device info (storage capacity, model, OS) fetched after connect.
     /// Delivered on the main queue.
     var onDeviceInfo: ((PhoneInfo) -> Void)?
@@ -779,7 +780,7 @@ final class SessionController {
     func pushFiles(_ urls: [URL]) {
         guard let s = snapshotSession() else {
             log("pushFiles: not connected")
-            emit { self.onPushResult?(nil, "not connected") }
+            emit { self.onPushResult?(0, nil, "not connected") }
             return
         }
         let files = urls.filter {
@@ -787,7 +788,7 @@ final class SessionController {
         }
         guard !files.isEmpty else {
             log("pushFiles: no regular files in the drop (folders unsupported)")
-            emit { self.onPushResult?(nil, L("Folders aren't supported yet — drop regular files")) }
+            emit { self.onPushResult?(0, nil, L("Folders aren't supported yet — drop regular files")) }
             return
         }
         Thread.detachNewThread { [weak self] in
@@ -796,11 +797,11 @@ final class SessionController {
             do {
                 // "" = the phone's default save directory.
                 let dir = try s.push_files(vec, RustString("")).toString()
-                self?.emit { self?.onPushResult?(dir, nil) }
+                self?.emit { self?.onPushResult?(files.count, dir, nil) }
             } catch {
                 let msg = ffiMessage(error)
                 log("push failed: \(msg)")
-                self?.emit { self?.onPushResult?(nil, msg) }
+                self?.emit { self?.onPushResult?(files.count, nil, msg) }
             }
         }
     }

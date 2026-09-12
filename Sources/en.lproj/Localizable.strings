@@ -65,7 +65,6 @@
 "Settings" = "Settings";
 "Sync" = "Sync";
 "Connection" = "Connection";
-"Notification relay" = "Notification relay";
 "Identity / account…" = "Identity / account…";
 "Reset all settings…" = "Reset all settings…";
 "Reset all settings?" = "Reset all settings?";
@@ -80,6 +79,16 @@
 "Picture" = "Picture";
 "Audio" = "Audio";
 "Diagnostics" = "Diagnostics";
+
+/* notifications tab (which banners this Mac shows) */
+"Notifications" = "Notifications";
+"Show a notification for" = "Show a notification for";
+"Device connected" = "Device connected";
+"Files sent or received" = "Files sent or received";
+"Phone notifications" = "Phone notifications";
+"Failures — a connect that didn't work, a transfer that didn't finish — are always reported. Phone notifications are forwarded by the phone only while that switch is on." = "Failures — a connect that didn't work, a transfer that didn't finish — are always reported. Phone notifications are forwarded by the phone only while that switch is on.";
+"Files sent" = "Files sent";
+"%lld file(s) sent to %@" = "%lld file(s) sent to %@";
 
 /* verify-code notification */
 "Verification code" = "Verification code";

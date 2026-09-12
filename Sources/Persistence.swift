@@ -282,9 +282,23 @@ enum Store {
         get { flag("verifyEnabled", default: true) }
         set { d.set(newValue, forKey: "verifyEnabled") }
     }
+    /// Forward the phone's notifications to this Mac as banners. Phone-side feature
+    /// (the phone only sends them while it's on), so also the "show them" switch.
     static var notifyEnabled: Bool {
         get { flag("notifyEnabled", default: true) }
         set { d.set(newValue, forKey: "notifyEnabled") }
+    }
+    /// Banner when a session comes up — whether the user, the auto-reconnect or
+    /// the phone started it. Failures are always announced regardless.
+    static var notifyOnConnect: Bool {
+        get { flag("notifyOnConnect", default: true) }
+        set { d.set(newValue, forKey: "notifyOnConnect") }
+    }
+    /// Banner when a file transfer finishes, in either direction. Failures are
+    /// always announced regardless.
+    static var notifyOnFileTransfer: Bool {
+        get { flag("notifyOnFileTransfer", default: true) }
+        set { d.set(newValue, forKey: "notifyOnFileTransfer") }
     }
     static var showStats: Bool {
         get { flag("showStats", default: false) }
