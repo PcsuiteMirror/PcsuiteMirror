@@ -14,6 +14,9 @@
 "Connect over USB" = "Connect over USB";
 "Connect over Wi-Fi…" = "Connect over Wi-Fi…";
 "Connect over Wi-Fi" = "Connect over Wi-Fi";
+"Can't reach %@ — no cable, and no Wi-Fi address is known for it" = "Can't reach %@ — no cable, and no Wi-Fi address is known for it";
+"Can't reach %@ over USB or Wi-Fi — check it's on the same network and awake" = "Can't reach %@ over USB or Wi-Fi — check it's on the same network and awake";
+"Can't reach %@ — allow USB debugging on the phone, or put it on this network" = "Can't reach %@ — allow USB debugging on the phone, or put it on this network";
 "New Connect" = "New Connect";
 "Pair new device (QR)…" = "Pair new device (QR)…";
 "Forget this device" = "Forget this device";

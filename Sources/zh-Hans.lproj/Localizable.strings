@@ -14,6 +14,9 @@
 "Connect over USB" = "通过 USB 连接";
 "Connect over Wi-Fi…" = "无线连接…";
 "Connect over Wi-Fi" = "无线连接";
+"Can't reach %@ — no cable, and no Wi-Fi address is known for it" = "无法连接 %@：没有插数据线，也没有已知的无线地址";
+"Can't reach %@ over USB or Wi-Fi — check it's on the same network and awake" = "无法连接 %@：有线和无线都不通，请确认手机在同一网络且已唤醒";
+"Can't reach %@ — allow USB debugging on the phone, or put it on this network" = "无法连接 %@：请在手机上允许 USB 调试，或让手机接入本机所在的网络";
 "New Connect" = "新建连接";
 "Pair new device (QR)…" = "扫码配对新设备…";
 "Forget this device" = "忘记此设备";

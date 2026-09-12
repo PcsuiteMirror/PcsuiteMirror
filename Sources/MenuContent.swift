@@ -134,9 +134,11 @@ struct MenuContent: View {
         if model.isConnected && dev.id == model.activeDeviceId {
             sessionActions
         } else {
-            Button(L("Connect over Wi-Fi")) { model.connect(dev, method: .lan) }
-                .disabled((dev.lastIP ?? "").isEmpty)
-            Button(L("Connect over USB")) { model.connect(dev, method: .usb) }
+            // One entry, not a transport menu: the app can tell which route is
+            // available faster than the user can, and picking wrong is the common
+            // mistake (a cable that isn't plugged in produces an adb diagnostic).
+            // Cable first, then Wi-Fi at the freshest address — see connectAuto.
+            Button(L("Connect")) { model.connectAuto(dev) }
         }
         Divider()
         Button(L("Forget this device")) { model.forget(dev) }

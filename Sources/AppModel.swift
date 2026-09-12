@@ -541,20 +541,84 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Connect a remembered device over the chosen transport. Wi-Fi uses the
-    /// device's last-known IP; USB connects to whatever phone is on the cable.
-    func connect(_ device: KnownDevice, method: Transport) {
+    // MARK: - Automatic transport choice
+
+    /// The remembered device an auto-connect sequence is running for, and the
+    /// message to show if its Wi-Fi leg fails. Both cleared once it settles.
+    private var autoConnectID: String?
+    private var autoConnectFailure: String?
+
+    /// Connect a remembered phone without making the user pick a transport.
+    ///
+    /// Cable first — it is faster and needs no address — then Wi-Fi at the
+    /// freshest address we have rather than the remembered one. If neither works
+    /// the user gets one plain "can't reach it" instead of the adb diagnostic a
+    /// wired attempt against an unplugged phone would produce.
+    ///
+    /// Caveat, inherited from the wired path generally: USB connects to whatever
+    /// phone is on the cable, and the roster is keyed by the phone's own device
+    /// id, which nothing tells us until `/base-info` answers. So with two phones
+    /// and the *other* one plugged in, this connects to the plugged-in one. That
+    /// was already true of the explicit "Connect over USB" item this replaces;
+    /// distinguishing them needs an id the cable probe doesn't carry.
+    func connectAuto(_ device: KnownDevice) {
         cancelReconnect()
-        let ref: DeviceRef
-        switch method {
-        case .usb: ref = DeviceRef(transport: .usb, ip: nil, name: device.name)
-        case .lan: ref = DeviceRef(transport: .lan, ip: device.lastIP, name: device.name)
+        autoConnectID = device.id
+        autoConnectFailure = nil
+        // Name-only ref: the transport isn't decided yet, and the status line
+        // shows `displayName`, which is the phone's name either way.
+        state = .connecting(DeviceRef(transport: .usb, ip: nil, name: device.name))
+
+        controller.probeUSB { [weak self] link in
+            guard let self, self.autoConnectID == device.id else { return }
+            if link == .ready {
+                // From here it is an ordinary wired connect: let its own errors
+                // through, they describe a cable that *is* plugged in.
+                log("自动连接: 有线可用 → USB")
+                self.autoConnectID = nil
+                self.controller.connect(DeviceRef(transport: .usb, ip: nil, name: device.name),
+                                        features: self.features, reconnect: false)
+                return
+            }
+            guard let ip = self.freshestIP(for: device) else {
+                log("自动连接: 无有线, 也没有已知的 Wi-Fi 地址 → 失败")
+                self.autoConnectID = nil
+                self.state = .failed(String(format: L("Can't reach %@ — no cable, and no Wi-Fi address is known for it"),
+                                            device.menuLabel))
+                self.scheduleFailedReset()
+                return
+            }
+            log("自动连接: 无有线(\(link.rawValue)) → Wi-Fi \(ip)")
+            // Whatever the LAN leg reports, the user asked for "connect to this
+            // phone" and both routes are now spent — so say that, once. When the
+            // cable was the fixable half, say *that* instead: a phone sitting on
+            // an unauthorized cable is one tap on the phone away from working,
+            // and "check the network" would send the user the wrong way.
+            self.autoConnectFailure = link == .unauthorized
+                ? String(format: L("Can't reach %@ — allow USB debugging on the phone, or put it on this network"),
+                         device.menuLabel)
+                : String(format: L("Can't reach %@ over USB or Wi-Fi — check it's on the same network and awake"),
+                         device.menuLabel)
+            self.connectRidingPresence(DeviceRef(transport: .lan, ip: ip, name: device.name),
+                                       reconnect: false)
         }
-        if method == .lan {
-            connectRidingPresence(ref, reconnect: false)
-        } else {
-            controller.connect(ref, features: features, reconnect: false)
+    }
+
+    /// The best Wi-Fi address for a remembered phone.
+    ///
+    /// In account mode the connection centre knows where the phone is *now*,
+    /// which matters because the remembered address goes stale as soon as it
+    /// roams to another network. Same preference order as the auto-reconnect.
+    private func freshestIP(for device: KnownDevice) -> String? {
+        if cloudAccountActive, !device.name.isEmpty,
+           let cur = cloudPhones.first(where: { $0.name == device.name && !$0.ip.isEmpty }) {
+            if cur.ip != device.lastIP {
+                log("自动连接: 用设备列表的当前地址 \(cur.ip)(缓存 \(device.lastIP ?? "无"))")
+            }
+            return cur.ip
         }
+        let cached = device.lastIP ?? ""
+        return cached.isEmpty ? nil : cached
     }
 
     /// Drop a device from the roster (and the auto-reconnect target if it was this one).
@@ -579,7 +643,15 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func cancelConnect() { cancelReconnect(); controller.cancel() }
+    /// Abort whatever connect is in flight. Clearing the auto-connect marker is
+    /// what stops its cable probe from carrying on into the Wi-Fi leg — the probe
+    /// runs on its own thread and `controller.cancel()` cannot reach it.
+    func cancelConnect() {
+        autoConnectID = nil
+        autoConnectFailure = nil
+        cancelReconnect()
+        controller.cancel()
+    }
     func disconnect() { cancelReconnect(); closeMirror(); controller.disconnect() }
 
     /// Start over as if freshly installed: drop the session, sign out of the vivo
@@ -976,6 +1048,18 @@ final class AppModel: ObservableObject {
             // Sanitize once, up front: nothing below (menu status, notification,
             // give-up message) should ever see the raw core/adb text.
             if case .failed(let raw) = st { st = .failed(self.friendlyConnectError(raw)) }
+            // An auto-connect that got this far already tried the cable. Whatever
+            // the Wi-Fi leg says on its own ("no answer from …:10191"), the thing
+            // the user needs told is that neither route worked.
+            if case .failed = st, let note = self.autoConnectFailure {
+                st = .failed(note)
+            }
+            switch st {
+            case .connected, .failed, .disconnected:
+                self.autoConnectID = nil
+                self.autoConnectFailure = nil
+            default: break
+            }
             // A failure inside a reconnect sequence isn't a UI event — the next
             // attempt is already scheduled. Holding on "reconnecting" avoids a
             // flash of the error text and the warning icon between attempts.
