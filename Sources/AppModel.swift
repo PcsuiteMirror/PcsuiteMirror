@@ -410,7 +410,14 @@ final class AppModel: ObservableObject {
     /// phone is waiting for, and it is what the phone shows as this Mac's state. Once
     /// the session resolves we report the outcome so presence can send `[27]`.
     private func handlePhoneConnectRequest(token: String) {
-        guard !isConnected, !presencePhoneIP.isEmpty else { return }
+        guard !presencePhoneIP.isEmpty else { return }
+        if isConnected {
+            // Already connected: still answer, or the phone's button spins forever (the
+            // official desktop answers this case too, with an "already connected" reason).
+            log("presence: 手机请求连接，但已在连接中 → 直接回执")
+            cloudPresence?.report_connect_result(0, "already connected")
+            return
+        }
         let ip = presencePhoneIP
         log("presence: 手机请求连接 → 建立会话 \(ip)")
         let name = cloudPhones.first(where: { $0.ip == ip })?.name ?? L("Phone")
@@ -419,6 +426,17 @@ final class AppModel: ObservableObject {
         cancelReconnect()   // drop any stale auto-reconnect (e.g. to an old-network IP)
         controller.connect(DeviceRef(transport: .lan, ip: ip, name: name),
                            features: features, reconnect: false, preauthToken: token)
+    }
+
+    /// However a phone-initiated session ends, presence has to hear about it: it upgraded
+    /// the held 10191 connection for that session, and keeping it afterwards leaves the
+    /// phone showing this Mac as connected — with function buttons that do nothing.
+    /// Presence then drops it and re-holds a plain discoverable connection.
+    private func endPhoneAskSession() {
+        guard phoneAskSession else { return }
+        phoneAskSession = false
+        cloudPresence?.report_session_ended()
+        log("presence: 会话结束 → 回到「可连」")
     }
 
     /// Tell the phone how the session it asked for went (presence sends `bytes:[27]`
@@ -884,11 +902,14 @@ final class AppModel: ObservableObject {
             // Answer a phone-initiated connect as soon as the attempt settles — the
             // phone is waiting on the held connection for the outcome.
             switch st {
-            case .connected: self.reportPhoneAskResult(0, "success")
-            case .failed(let m): self.reportPhoneAskResult(1, m)
+            case .connected:
+                self.reportPhoneAskResult(0, "success")
+            case .failed(let m):
+                self.reportPhoneAskResult(1, m)
+                self.endPhoneAskSession()
             case .disconnected:
                 self.reportPhoneAskResult(1, "disconnected")
-                self.phoneAskSession = false
+                self.endPhoneAskSession()
             default: break
             }
             // Keep the 10191 presence in step with the session: a session the phone
