@@ -977,6 +977,24 @@ final class AppModel: ObservableObject {
         controller.onNotification = { app, title, content in
             Notifier.postPhoneNotification(app: app, title: title, body: content)
         }
+        // The phone's own function buttons on this Mac's card in its connection center.
+        // 「投屏」 arrives as openVivoScreen: open the mirror window (which starts the
+        // stream), then answer with the same msgId — the phone's button waits on it.
+        controller.onConnectCenterRequest = { [weak self] name, msgId in
+            guard let self else { return }
+            switch name {
+            case "openVivoScreen":
+                log("手机发起投屏 → 打开投屏窗口")
+                self.openMirror()
+                self.controller.replyConnectCenter(name, msgId, 0, "")
+            case "closeVivoScreen":
+                log("手机关闭投屏")
+                self.closeMirror()
+                self.controller.replyConnectCenter(name, msgId, 0, "")
+            default:
+                self.controller.replyConnectCenter(name, msgId, -1, "unsupported")
+            }
+        }
         controller.onPushResult = { [weak self] dir, error in
             guard let self else { return }
             if let dir {

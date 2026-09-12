@@ -62,6 +62,12 @@ final class SessionController {
     /// A phone notification was forwarded: `(appName, title, content)`. Delivered on
     /// the main queue while connected (if the notify feature is armed).
     var onNotification: ((String, String, String) -> Void)?
+    /// The phone's connection center asked this PC to do something with one of its
+    /// function buttons: `(name, msgId)` — `openVivoScreen` is its 「投屏」,
+    /// `closeVivoScreen` stops it. Delivered on the main queue; the handler owns the
+    /// action (it has the mirror window and settings) and **must** finish by calling
+    /// `replyConnectCenter` with the same msgId — the phone's button waits for it.
+    var onConnectCenterRequest: ((String, String) -> Void)?
     /// A phone→PC「快传」batch event: `(type, files, dir, error)` where type is
     /// "started" / "done" / "failed" / "cancelled". Delivered on the main queue
     /// while connected.
@@ -109,6 +115,7 @@ final class SessionController {
 
     private var verifyDone: DispatchSemaphore?
     private var notifyDone: DispatchSemaphore?
+    private var centerDone: DispatchSemaphore?
     private var fileTransDone: DispatchSemaphore?
     private var frameDone: DispatchSemaphore?
     private var privacyDone: DispatchSemaphore?
@@ -248,6 +255,8 @@ final class SessionController {
             try s.enable_file_transfer(Self.fileSaveDir)
             startFileTransferLoop(s)
         } catch { log("file-transfer enable failed: \(ffiMessage(error))") }
+        // The phone's own function buttons (投屏 …) — always armed, same reason.
+        startConnectCenterLoop(s)
         setSession(s)
         connGen += 1
         currentDevice = device
@@ -361,6 +370,11 @@ final class SessionController {
             s.stop_file_transfer()
             done.wait()                 // block until the file-transfer thread exits
             fileTransDone = nil
+        }
+        if let s = session, let done = centerDone {
+            s.stop_connect_center()
+            done.wait()                 // block until the connect-center thread exits
+            centerDone = nil
         }
         if let s = session, let done = watchDone {
             s.stop_watch()
@@ -710,6 +724,45 @@ final class SessionController {
         }
         t.name = "notify-loop"
         t.start()
+    }
+
+    // MARK: - Phone connection-center requests (its function buttons)
+
+    /// Pump the phone's connection-center requests. `openVivoScreen` is the phone
+    /// tapping 「投屏」 on this PC's card: start mirroring with authority source 2 (the
+    /// connection center asked, not us) and answer with the same msgId — the phone's
+    /// button sits and waits for that reply.
+    private func startConnectCenterLoop(_ s: PcSession) {
+        let done = DispatchSemaphore(value: 0)
+        centerDone = done
+        let t = Thread { [weak self] in
+            while true {
+                let raw = s.next_connect_center_request().toString()
+                if raw.isEmpty { break }            // stopped or session ended
+                let f = raw.components(separatedBy: "\t")
+                let name = f.count > 0 ? f[0] : ""
+                let msgId = f.count > 1 ? f[1] : ""
+                log("connect center: \(name) (msgId=\(msgId))")
+                switch name {
+                case "openVivoScreen", "closeVivoScreen":
+                    self?.emit { self?.onConnectCenterRequest?(name, msgId) }
+                default:
+                    // openExtScreen / closeExtScreen — not implemented; answer rather
+                    // than leave the phone's button spinning.
+                    s.reply_connect_center(name, msgId, -1, "unsupported")
+                }
+            }
+            done.signal()
+        }
+        t.name = "connect-center-loop"
+        t.start()
+    }
+
+    /// Answer a connection-center request (same name + msgId; `code` 0 = done).
+    func replyConnectCenter(_ name: String, _ msgId: String, _ code: Int64, _ reason: String) {
+        queue.async { [self] in
+            session?.reply_connect_center(name, msgId, code, reason)
+        }
     }
 
     // MARK: - File transfer (push + phone→PC「快传」receive)
