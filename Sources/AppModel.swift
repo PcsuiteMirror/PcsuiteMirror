@@ -114,9 +114,10 @@ final class AppModel: ObservableObject {
     /// The phone IP the current hold targets, so a roamed address restarts it.
     private var presencePhoneIP: String = ""
     private var presenceStatusTimer: Timer?
-    /// This session came from the phone tapping 「连接」, so it rides on the held 10191
-    /// connection and presence must keep holding it (see `syncPresenceHold`).
-    private var phoneAskSession = false
+    /// This session rides the held 10191 connection — either the phone asked for it, or
+    /// we upgraded the hold ourselves — so presence must keep holding it while it lives
+    /// (see `syncPresenceHold`) and must be told when it ends.
+    private var sessionRidesPresence = false
     /// The phone is still waiting for the outcome of the connect it asked for.
     private var phoneAskAwaitingReport = false
 
@@ -282,7 +283,7 @@ final class AppModel: ObservableObject {
         let ip = lanIP.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !ip.isEmpty else { return }
         cancelReconnect()
-        controller.connect(DeviceRef(transport: .lan, ip: ip), features: features, reconnect: false)
+        connectRidingPresence(DeviceRef(transport: .lan, ip: ip), reconnect: false)
     }
 
     // MARK: - Phones on the vivo account
@@ -292,8 +293,8 @@ final class AppModel: ObservableObject {
     func connectCloud(_ phone: CloudDevice) {
         guard !phone.ip.isEmpty else { return }
         cancelReconnect()
-        controller.connect(DeviceRef(transport: .lan, ip: phone.ip, name: phone.name),
-                           features: features, reconnect: false)
+        connectRidingPresence(DeviceRef(transport: .lan, ip: phone.ip, name: phone.name),
+                              reconnect: false)
     }
 
     /// Start, stop, or restart the phone-list poll to match the account state.
@@ -370,7 +371,7 @@ final class AppModel: ObservableObject {
             default: return true
             }
         }()
-        let wanted = cloudAccountActive && holdPresence && !(sessionActive && !phoneAskSession)
+        let wanted = cloudAccountActive && holdPresence && !(sessionActive && !sessionRidesPresence)
         let ip = cloudPhones.first(where: { !$0.ip.isEmpty })?.ip ?? ""
         guard wanted, !ip.isEmpty else {
             if cloudPresence != nil { stopPresenceHold() }
@@ -421,7 +422,7 @@ final class AppModel: ObservableObject {
         let ip = presencePhoneIP
         log("presence: 手机请求连接 → 建立会话 \(ip)")
         let name = cloudPhones.first(where: { $0.ip == ip })?.name ?? L("Phone")
-        phoneAskSession = true          // keep the hold: this session rides on it
+        sessionRidesPresence = true          // keep the hold: this session rides on it
         phoneAskAwaitingReport = true
         cancelReconnect()   // drop any stale auto-reconnect (e.g. to an old-network IP)
         controller.connect(DeviceRef(transport: .lan, ip: ip, name: name),
@@ -432,9 +433,9 @@ final class AppModel: ObservableObject {
     /// the held 10191 connection for that session, and keeping it afterwards leaves the
     /// phone showing this Mac as connected — with function buttons that do nothing.
     /// Presence then drops it and re-holds a plain discoverable connection.
-    private func endPhoneAskSession() {
-        guard phoneAskSession else { return }
-        phoneAskSession = false
+    private func endPresenceRidingSession() {
+        guard sessionRidesPresence else { return }
+        sessionRidesPresence = false
         cloudPresence?.report_session_ended()
         log("presence: 会话结束 → 回到「可连」")
     }
@@ -458,6 +459,36 @@ final class AppModel: ObservableObject {
         if !presenceStatus.isEmpty { presenceStatus = "" }
     }
 
+    /// Start a Wi-Fi connect, riding the presence hold when it is held to that phone:
+    /// presence turns that connection into the formal connect and hands back the token,
+    /// so the phone keeps showing this Mac throughout. Opening a second 10191 (what a
+    /// plain connect does) makes the phone close the held one — the device then reads as
+    /// 「未发现」 for as long as our own session lasts.
+    ///
+    /// Falls back to the plain path whenever there is no hold for that IP, or the upgrade
+    /// fails. The upgrade talks to the phone, so it runs off the main thread.
+    private func connectRidingPresence(_ ref: DeviceRef, reconnect: Bool) {
+        guard let p = cloudPresence, !presencePhoneIP.isEmpty, ref.ip == presencePhoneIP else {
+            controller.connect(ref, features: features, reconnect: reconnect)
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let token = p.upgrade_for_connect().toString()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if token.isEmpty {
+                    log("presence: 保活连接升级失败 → 退回独立 ConnectFlow")
+                    self.controller.connect(ref, features: self.features, reconnect: reconnect)
+                } else {
+                    log("presence: 复用保活连接升级为正式连接(不另开 10191)")
+                    self.sessionRidesPresence = true
+                    self.controller.connect(ref, features: self.features,
+                                            reconnect: reconnect, preauthToken: token)
+                }
+            }
+        }
+    }
+
     /// Connect a remembered device over the chosen transport. Wi-Fi uses the
     /// device's last-known IP; USB connects to whatever phone is on the cable.
     func connect(_ device: KnownDevice, method: Transport) {
@@ -467,7 +498,11 @@ final class AppModel: ObservableObject {
         case .usb: ref = DeviceRef(transport: .usb, ip: nil, name: device.name)
         case .lan: ref = DeviceRef(transport: .lan, ip: device.lastIP, name: device.name)
         }
-        controller.connect(ref, features: features, reconnect: false)
+        if method == .lan {
+            connectRidingPresence(ref, reconnect: false)
+        } else {
+            controller.connect(ref, features: features, reconnect: false)
+        }
     }
 
     /// Drop a device from the roster (and the auto-reconnect target if it was this one).
@@ -647,7 +682,11 @@ final class AppModel: ObservableObject {
             reconnectDevice = dev   // keep dialing the fresh IP on later attempts
         }
         log("auto-reconnect attempt \(reconnectAttempts)/\(maxReconnectAttempts) → \(dev.displayName)")
-        controller.connect(dev, features: features, reconnect: true)
+        if dev.transport == .lan {
+            connectRidingPresence(dev, reconnect: true)
+        } else {
+            controller.connect(dev, features: features, reconnect: true)
+        }
     }
 
     /// No phone on the cable (or one that hasn't authorized debugging yet). Show a
@@ -906,10 +945,10 @@ final class AppModel: ObservableObject {
                 self.reportPhoneAskResult(0, "success")
             case .failed(let m):
                 self.reportPhoneAskResult(1, m)
-                self.endPhoneAskSession()
+                self.endPresenceRidingSession()
             case .disconnected:
                 self.reportPhoneAskResult(1, "disconnected")
-                self.endPhoneAskSession()
+                self.endPresenceRidingSession()
             default: break
             }
             // Keep the 10191 presence in step with the session: a session the phone
