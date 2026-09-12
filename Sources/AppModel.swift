@@ -483,7 +483,21 @@ final class AppModel: ObservableObject {
     /// Falls back to the plain path whenever there is no hold for that IP, or the upgrade
     /// fails. The upgrade talks to the phone, so it runs off the main thread.
     private func connectRidingPresence(_ ref: DeviceRef, reconnect: Bool) {
-        guard let p = cloudPresence, !presencePhoneIP.isEmpty, ref.ip == presencePhoneIP else {
+        guard let ip = ref.ip, !ip.isEmpty else {
+            controller.connect(ref, features: features, reconnect: reconnect)
+            return
+        }
+        // At launch the auto-reconnect fires immediately while the phone list is still
+        // loading, so there is no hold yet to ride. Start one for this phone first rather
+        // than falling back: the fallback opens its own 10191, the phone closes the hold
+        // that would have shown this Mac, and the device stays grey for the whole session.
+        // The upgrade request below waits for the hold to come up.
+        if cloudAccountActive, holdPresence, cloudPresence == nil {
+            log("presence: 连接前先起保活 \(ip)")
+            startPresenceHold(ip: ip)
+        }
+        guard let p = cloudPresence,
+              ip == presencePhoneIP || p.phone_ip().toString() == ip else {
             controller.connect(ref, features: features, reconnect: reconnect)
             return
         }
@@ -495,9 +509,20 @@ final class AppModel: ObservableObject {
                     log("presence: 保活连接升级失败 → 退回独立 ConnectFlow")
                     self.controller.connect(ref, features: self.features, reconnect: reconnect)
                 } else {
+                    // Connect to the address the hold is actually on: the token was
+                    // registered through *that* connection, and the hold may have moved
+                    // there on its own (a remembered address goes stale when the phone
+                    // changes network).
+                    let held = p.phone_ip().toString()
+                    let target = held.isEmpty || held == ref.ip
+                        ? ref
+                        : DeviceRef(transport: .lan, ip: held, name: ref.name)
+                    if target.ip != ref.ip {
+                        log("presence: 会话改用保活当前地址 \(ref.ip ?? "?") → \(held)")
+                    }
                     log("presence: 复用保活连接升级为正式连接(不另开 10191)")
                     self.sessionRidesPresence = true
-                    self.controller.connect(ref, features: self.features,
+                    self.controller.connect(target, features: self.features,
                                             reconnect: reconnect, preauthToken: token)
                 }
             }
