@@ -138,6 +138,7 @@ func presenceStatusLabel(_ raw: String) -> String {
     case "holding": return L("Discoverable — the phone can see this Mac")
     case "connecting": return L("Connecting…")
     case "reconnecting": return L("Reconnecting…")
+    case "waiting": return L("Phone not reachable — retrying")
     case "stopped", "": return L("Not held")
     default:
         if raw.hasPrefix("error: ") {

@@ -152,5 +152,6 @@
 "Connecting…" = "Connecting…";
 "Reconnecting…" = "Reconnecting…";
 "Not held" = "Not held";
+"Phone not reachable — retrying" = "Phone not reachable — retrying";
 "Not available: %@" = "Not available: %@";
 "Phone" = "Phone";

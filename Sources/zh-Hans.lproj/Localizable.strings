@@ -178,5 +178,6 @@
 "Connecting…" = "连接中…";
 "Reconnecting…" = "重连中…";
 "Not held" = "未保持";
+"Phone not reachable — retrying" = "手机不在线，正在重试";
 "Not available: %@" = "不可用：%@";
 "Phone" = "手机";

@@ -378,6 +378,12 @@ final class AppModel: ObservableObject {
             return
         }
         if cloudPresence != nil && ip == presencePhoneIP { return }  // already holding this IP
+        // The hold re-resolves addresses itself; if it has already moved to what the list
+        // now reports, leave it alone instead of restarting the task.
+        if let p = cloudPresence, p.phone_ip().toString() == ip {
+            presencePhoneIP = ip
+            return
+        }
         startPresenceHold(ip: ip)
     }
 
@@ -395,6 +401,15 @@ final class AppModel: ObservableObject {
             guard let self, let p = self.cloudPresence else { return }
             let s = p.status().toString()
             if s != self.presenceStatus { self.presenceStatus = s }
+            // The hold re-resolves the phone's address on its own when it moves (pocketed,
+            // off the Wi-Fi, back on a new lease) — follow it, or a connect we start would
+            // compare against a stale address and open a second 10191 instead of riding
+            // the hold.
+            let held = p.phone_ip().toString()
+            if !held.isEmpty, held != self.presencePhoneIP {
+                log("presence: 目标地址更新 \(self.presencePhoneIP) → \(held)")
+                self.presencePhoneIP = held
+            }
             // The phone tapped 「连接」 → establish the session with the token presence
             // registered for it (connect only; the mirror window stays user-initiated,
             // matching the phone's semantics).
