@@ -174,18 +174,15 @@ final class SessionController {
                 case .usb: s = try pcsuite_connect_usb()
                 case .lan:
                     let ip = device.ip ?? ""
-                    // connectType=2 (pre-shared seed) only works when the user has a
-                    // seed stored for *this* IP; without one, registration fails
-                    // outright ("LAN mode needs a stored_seed"). Fall back to the
-                    // seedless connectType=1 — it needs only the openID (which
-                    // self-fills from the phone), so Wi-Fi connect works out of the
-                    // box. An explicit "connect without a seed" preference also forces
-                    // connectType=1.
-                    let hasSeed = Store.seeds.contains {
-                        $0.ip.trimmingCharacters(in: .whitespacesAndNewlines) == ip
-                    }
-                    let remote = Store.lanUseRemote || !hasSeed
-                    log("LAN connect \(ip) connectType=\(remote ? 1 : 2)")
+                    // Ask for the nearby WLAN connect (connectType=2) and let the core
+                    // resolve the seed — a configured one, else the phone's own seed
+                    // from the account's device list — falling back to the seedless
+                    // connectType=1 only when there is none. The two are not
+                    // interchangeable to the phone: connectType=1 is the FARAWAYWLAN
+                    // (remote) path, so defaulting to it on our own LAN is wrong. An
+                    // explicit "connect without a seed" preference still forces it.
+                    let remote = Store.lanUseRemote
+                    log("LAN connect \(ip) (connectType=\(remote ? "1" : "2, 无 seed 时回落 1"))")
                     s = try pcsuite_connect_lan(ip, remote)
                 }
                 if isStale(gen) {                  // cancelled mid-connect → discard
