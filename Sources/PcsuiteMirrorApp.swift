@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UserNotifications
 
 @main
 struct PcsuiteMirrorApp: App {
@@ -22,7 +23,7 @@ struct PcsuiteMirrorApp: App {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         pcsuite_log_init()
         // Tell the core which mode we're in before anything can connect — in
@@ -36,6 +37,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do { try pcsuite_presence_start() } catch { log("presence: \(ffiMessage(error))") }
         // Menu-bar-only app: no Dock icon, no main window at launch.
         NSApp.setActivationPolicy(.accessory)
+        UNUserNotificationCenter.current().delegate = self
         Notifier.requestAuth()
+    }
+
+    /// Show a banner even while this app is the active one. The system drops a
+    /// notification from the frontmost app unless its delegate says otherwise —
+    /// sensible for an app with a window the user is looking at, but this one is
+    /// frontmost after any of its alerts or its Settings window, with nothing on
+    /// screen for the user to see the event in. So: always present.
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
+        done([.banner, .list, .sound])
     }
 }

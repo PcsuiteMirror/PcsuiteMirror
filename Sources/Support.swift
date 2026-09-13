@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Network
 import UserNotifications
 import ServiceManagement
 
@@ -102,14 +103,94 @@ enum Pasteboard {
     }
 }
 
+/// A connect failure as the menu can hand it on: the line it showed, and the
+/// core's own text behind that line when the two differ.
+struct ConnectFailure: Equatable {
+    var shown: String
+    var detail: String?
+
+    /// What "copy" puts on the clipboard: the shown line, then the detail on its
+    /// own line — unless it would only repeat the first.
+    var clipboardText: String {
+        guard let d = detail?.trimmingCharacters(in: .whitespacesAndNewlines), !d.isEmpty, d != shown else {
+            return shown
+        }
+        return "\(shown)\n\(d)"
+    }
+}
+
+/// What one SYN to a host said back.
+enum ProbeVerdict {
+    case open       // accepted: something is listening
+    case refused    // the host answered with a reset: it is there, the port is closed
+    case silent     // nothing came back in time, or there is no route to it at all
+}
+
+/// Ask every host in `hosts` whether it accepts a TCP connection on `port`: one
+/// SYN each, all at once, closed the moment it is answered — nothing is ever
+/// sent. A refused or unroutable host answers in milliseconds; only a silent one
+/// costs the whole `timeout`. Result delivered on the main queue.
+func probeTCP(_ hosts: [String], port: UInt16, timeout: TimeInterval,
+              done: @escaping ([String: ProbeVerdict]) -> Void) {
+    guard !hosts.isEmpty, let p = NWEndpoint.Port(rawValue: port) else { done([:]); return }
+    let queue = DispatchQueue(label: "probe-tcp")
+    var verdicts: [String: ProbeVerdict] = [:]
+    var pending = Set(hosts)
+    var conns: [NWConnection] = []
+    let finish = { (host: String, verdict: ProbeVerdict) in
+        guard pending.remove(host) != nil else { return }
+        verdicts[host] = verdict
+        if pending.isEmpty {
+            conns.forEach { $0.cancel() }
+            let result = verdicts
+            DispatchQueue.main.async { done(result) }
+        }
+    }
+    for host in hosts {
+        let c = NWConnection(host: NWEndpoint.Host(host), port: p, using: .tcp)
+        conns.append(c)
+        c.stateUpdateHandler = { st in
+            switch st {
+            case .ready:
+                finish(host, .open)
+            case .failed(let err):
+                if case .posix(let code) = err, code == .ECONNREFUSED {
+                    finish(host, .refused)
+                } else {
+                    finish(host, .silent)      // no route, host unreachable, …
+                }
+            // `.waiting` = no path to it right now (an interface that is down);
+            // it would sit there until the timeout, and the answer is already no.
+            case .waiting:
+                finish(host, .silent)
+            default: break
+            }
+        }
+        c.start(queue: queue)
+    }
+    queue.asyncAfter(deadline: .now() + timeout) {
+        hosts.forEach { finish($0, .silent) }
+    }
+}
+
 /// Native macOS banners. Which of the success ones actually post is the caller's
 /// call (see the `notifyOn*` switches on `AppModel`); the failure ones are always
 /// worth showing — the menu dropdown is usually closed when they happen, so the
 /// inline status text alone would go unseen.
 enum Notifier {
+    /// Ask once at launch; the answer goes to the log, because "no banner
+    /// appeared" has several silent causes (denied in System Settings, Focus
+    /// mode, a build the system doesn't recognise) and this is the one we can
+    /// rule in or out without guessing.
     static func requestAuth() {
         UNUserNotificationCenter.current()
-            .requestAuthorization(options: [.alert, .sound]) { _, _ in }
+            .requestAuthorization(options: [.alert, .sound]) { granted, error in
+                if let error {
+                    log("notifications: authorization failed — \(error.localizedDescription)")
+                } else {
+                    log("notifications: \(granted ? "allowed" : "not allowed") by the user")
+                }
+            }
     }
 
     /// One fire-and-forget banner: no trigger, throwaway id, default sound.
@@ -120,7 +201,9 @@ enum Notifier {
         content.body = body
         content.sound = .default
         let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
+        UNUserNotificationCenter.current().add(req) { error in
+            if let error { log("notifications: \"\(title)\" not delivered — \(error.localizedDescription)") }
+        }
     }
 
     /// A session came up. Names the phone and the route ("iQOO 15 · USB"); a

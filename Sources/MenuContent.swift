@@ -7,7 +7,20 @@ struct MenuContent: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        Text(model.statusText)   // disabled status label
+        // The status line. A failure is a row that copies its full text: the
+        // row itself says only that it failed (a menu is as wide as its widest
+        // row, and a core error runs to a full sentence), and a banner can't be
+        // copied from. Once the line has reverted to Disconnected, the failure
+        // stays one row below until the next attempt — the banner is usually
+        // what brings the user here, seconds later.
+        if case .failed = model.state {
+            Button("\(model.statusText) — \(L("click to copy details"))") { model.copyFailure() }
+        } else {
+            Text(model.statusText)   // disabled status label
+            if model.lastFailure != nil {
+                Button("\(L("Last error")) — \(L("click to copy details"))") { model.copyFailure() }
+            }
+        }
         if let note = model.fileTransferNote {
             Text(note)           // transient file-transfer status
         }

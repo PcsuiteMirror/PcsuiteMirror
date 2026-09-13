@@ -161,8 +161,14 @@ struct GeneralTab: View {
             Section {
                 Toggle(L("Launch at login"), isOn: $model.launchAtLogin)
                 Toggle(L("Auto-reconnect last device"), isOn: $model.autoReconnect)
+                Stepper(value: $model.reconnectLimit, in: 1...10) {
+                    Text("\(L("Reconnect attempts")): \(model.reconnectLimit)")
+                }
+                .disabled(!model.autoReconnect)
             } header: {
                 Text(L("Startup"))
+            } footer: {
+                Text(L("Each attempt checks whether the phone is reachable before dialing, so 1 is usually enough — a phone that isn't on the network won't appear on a retry."))
             }
 
             Section {

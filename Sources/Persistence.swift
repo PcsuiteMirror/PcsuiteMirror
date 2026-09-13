@@ -30,6 +30,18 @@ struct DeviceRef: Codable, Equatable {
         case .lan: return ip ?? L("via Wi-Fi")
         }
     }
+
+    /// The route this ref goes by, for a status line that says which leg is
+    /// being tried: "USB", "Wi-Fi 192.168.1.42", "Tailscale 100.64.0.9". nil
+    /// for a ref that has no route yet (an auto-connect still deciding).
+    var routeLabel: String? {
+        switch transport {
+        case .usb: return L("via USB")
+        case .lan:
+            guard let ip, !ip.isEmpty else { return nil }
+            return remote == true ? "Tailscale \(ip)" : "\(L("via Wi-Fi")) \(ip)"
+        }
+    }
 }
 
 /// A remembered phone, keyed by its stable unique device id (`mobileDeviceId`).
@@ -287,6 +299,17 @@ enum Store {
     static var autoReconnect: Bool {
         get { flag("autoReconnect", default: true) }
         set { d.set(newValue, forKey: "autoReconnect") }
+    }
+    /// How many times auto-reconnect tries before giving up. 1 by default: the
+    /// attempt probes for reachability first, so a second try rarely finds what
+    /// the first didn't — and a phone that's simply not on the network shouldn't
+    /// be dialled over and over. Clamped to 1…10 on read.
+    static var reconnectAttempts: Int {
+        get {
+            let v = d.object(forKey: "reconnectAttempts") as? Int ?? 1
+            return min(10, max(1, v))
+        }
+        set { d.set(min(10, max(1, newValue)), forKey: "reconnectAttempts") }
     }
     /// Account mode: keep a 10191 presence connection to the phone open so the
     /// phone's connection center lists this Mac as discoverable ("可连"). On by

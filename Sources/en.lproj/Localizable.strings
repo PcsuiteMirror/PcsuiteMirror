@@ -4,10 +4,16 @@
 "Reconnecting…" = "Reconnecting…";
 "Connected" = "Connected";
 "Connection failed" = "Connection failed";
+"Last error" = "Last error";
+"click to copy details" = "click to copy details";
 
 /* transport labels */
 "via USB" = "USB";
 "via Wi-Fi" = "Wi‑Fi";
+/* auto-connect phases before a route is chosen (status line) */
+"checking the cable…" = "checking the cable…";
+"asking Wi-Fi…" = "asking Wi-Fi…";
+"asking Wi-Fi and Tailscale…" = "asking Wi-Fi and Tailscale…";
 
 /* connect actions */
 "Connect via USB" = "Connect via USB";
@@ -176,3 +182,5 @@
 "Phone not reachable — retrying" = "Phone not reachable — retrying";
 "Not available: %@" = "Not available: %@";
 "Phone" = "Phone";
+"Reconnect attempts" = "Reconnect attempts";
+"Each attempt checks whether the phone is reachable before dialing, so 1 is usually enough — a phone that isn't on the network won't appear on a retry." = "Each attempt checks whether the phone is reachable before dialing, so 1 is usually enough — a phone that isn't on the network won't appear on a retry.";

@@ -14,7 +14,33 @@ enum MirrorLink: Equatable {
 /// main thread (SwiftUI actions, plus controller callbacks which hop to main).
 final class AppModel: ObservableObject {
     // Connection / mirroring state.
-    @Published private(set) var state: ConnState = .disconnected
+    @Published private(set) var state: ConnState = .disconnected {
+        didSet {
+            switch state {
+            case .failed(let m):
+                lastFailure = ConnectFailure(shown: m, detail: failureDetail)
+                connectPhase = nil
+            case .connecting, .reconnecting:
+                // A new attempt (or a working session) is what makes an old
+                // failure stale — not the status line reverting to Disconnected.
+                lastFailure = nil
+                failureDetail = nil
+            case .connected:
+                lastFailure = nil
+                failureDetail = nil
+                connectPhase = nil
+            case .disconnected:
+                connectPhase = nil
+            default: break
+            }
+        }
+    }
+    /// The most recent connect failure, kept past the status line's reset so it
+    /// can still be copied from the menu. nil once a new attempt starts.
+    @Published private(set) var lastFailure: ConnectFailure?
+    /// What the core actually said for the failure about to be shown (the menu
+    /// line is often a friendlier rewrite); picked up by `state`'s didSet.
+    private var failureDetail: String?
     @Published private(set) var mirroring = false
     @Published private(set) var displayLayer: AVSampleBufferDisplayLayer?
     @Published private(set) var videoSize: CGSize = .zero
@@ -49,6 +75,10 @@ final class AppModel: ObservableObject {
             mirrorLink = showing ? .lost : .live
         }
     }
+    /// How many times auto-reconnect tries before giving up (1…10, default 1).
+    /// Read live by `maxReconnectAttempts`; a change mid-sequence takes effect on
+    /// the next attempt. Distinct from the private `reconnectAttempts` counter.
+    @Published var reconnectLimit: Int { didSet { Store.reconnectAttempts = reconnectLimit } }
     // Feature toggles apply to a live session immediately (no reconnect needed);
     // didSet only fires on user changes, never during init.
     @Published var clipboardEnabled: Bool { didSet { Store.clipboardEnabled = clipboardEnabled; applyClipboardLive() } }
@@ -132,7 +162,8 @@ final class AppModel: ObservableObject {
     // pending attempt; `reconnectDevice` is non-nil only while a sequence is active.
     private var reconnectGen = 0
     private var reconnectAttempts = 0
-    private let maxReconnectAttempts = 6
+    /// How many attempts before giving up — the user's 重连次数 setting (default 1).
+    private var maxReconnectAttempts: Int { reconnectLimit }
     private var reconnectDevice: DeviceRef?
     /// Consecutive empty USB cable probes in the current wait — only used to slow
     /// the polling down; the wait itself is unbounded.
@@ -158,6 +189,7 @@ final class AppModel: ObservableObject {
 
     init() {
         autoReconnect = Store.autoReconnect
+        reconnectLimit = Store.reconnectAttempts
         holdPresence = Store.holdPresence
         clipboardEnabled = Store.clipboardEnabled
         clipboardDirection = Store.clipboardDirection
@@ -234,15 +266,47 @@ final class AppModel: ObservableObject {
         default: return nil
         }
     }
+    /// What an auto-connect is doing while it has no route to name yet —
+    /// checking the cable, then asking 10191 which address answers. Shown in
+    /// place of the route on the status line; nil once a leg is under way and
+    /// the connect target itself says which.
+    @Published private(set) var connectPhase: String?
+
+    /// "Connecting… iQOO 15 · Wi-Fi 192.168.1.42": the phone and the leg being
+    /// tried, so a three-leg auto-connect shows where it has got to instead of
+    /// the same line for twenty seconds.
+    private func progressLine(_ verb: String, _ d: DeviceRef) -> String {
+        let route = connectPhase ?? d.routeLabel
+        let named = !(d.name ?? "").isEmpty
+        switch (named, route) {
+        case (true, let r?): return "\(verb) \(d.displayName) · \(r)"
+        case (false, let r?): return "\(verb) \(r)"      // the name would only repeat the address
+        default: return "\(verb) \(d.displayName)"
+        }
+    }
+
     var statusText: String {
         switch state {
         case .disconnected: return L("Disconnected")
-        case .connecting(let d): return "\(L("Connecting…")) \(d.displayName)"
-        case .reconnecting(let d): return "\(L("Reconnecting…")) \(d.displayName)"
+        case .connecting(let d): return progressLine(L("Connecting…"), d)
+        case .reconnecting(let d): return progressLine(L("Reconnecting…"), d)
         case .waitingForPhone: return L("Waiting for a phone over USB…")
         case .connected(let d): return "\(L("Connected")) · \(d.displayName)"
-        case .failed(let m): return "\(L("Connection failed")): \(m)"
+        // Just the fact: a menu is as wide as its widest row, and a core error
+        // runs to a full sentence. The text itself is one click away (copyFailure)
+        // and in the banner that announced it.
+        case .failed: return L("Connection failed")
         }
+    }
+
+    /// Put the last connect failure on the clipboard — the line the menu showed
+    /// plus the core's own words when they differ — for pasting into a bug report
+    /// or a chat. The menu row that calls this is the only place the full text
+    /// is reachable from: the status line abbreviates it.
+    func copyFailure() {
+        guard let f = lastFailure else { return }
+        Pasteboard.copy(f.clipboardText)
+        log("copied last failure to the clipboard")
     }
     var statusIcon: String {
         switch state {
@@ -509,20 +573,44 @@ final class AppModel: ObservableObject {
             controller.connect(ref, features: features, reconnect: reconnect)
             return
         }
-        // At launch the auto-reconnect fires immediately while the phone list is still
-        // loading, so there is no hold yet to ride. Start one for this phone first rather
-        // than falling back: the fallback opens its own 10191, the phone closes the hold
-        // that would have shown this Mac, and the device stays grey for the whole session.
-        // The upgrade request below waits for the hold to come up.
-        if cloudAccountActive, holdPresence, cloudPresence == nil {
-            log("presence: 连接前先起保活 \(ip)")
-            startPresenceHold(ip: ip)
+        // A hold already up for this IP means the phone is there — ride it now.
+        if let p = cloudPresence, ip == presencePhoneIP || p.phone_ip().toString() == ip {
+            rideHold(p, ref: ref, reconnect: reconnect)
+            return
         }
-        guard let p = cloudPresence,
-              ip == presencePhoneIP || p.phone_ip().toString() == ip else {
+        // No hold yet. Starting one and waiting on `upgrade_for_connect` costs the
+        // full 15s when the phone isn't reachable at `ip` — the hold can't connect,
+        // so the upgrade never comes — and auto-reconnect pays that per attempt.
+        // Ask 10191 first: a reachable phone answers in milliseconds, an absent
+        // one costs the 3s probe, not 15s. Start a hold only when it actually
+        // answers; otherwise dial 10191 ourselves (a bounded ConnectFlow that
+        // fails fast into the caller's own retry).
+        guard cloudAccountActive, holdPresence else {
             controller.connect(ref, features: features, reconnect: reconnect)
             return
         }
+        probeTCP([ip], port: 10191, timeout: 3) { [weak self] verdicts in
+            guard let self else { return }
+            if verdicts[ip] == .open {
+                log("presence: \(ip) 应答 → 起保活并升级")
+                self.startPresenceHold(ip: ip)
+                if let p = self.cloudPresence {
+                    self.rideHold(p, ref: ref, reconnect: reconnect)
+                } else {
+                    self.controller.connect(ref, features: self.features, reconnect: reconnect)
+                }
+            } else {
+                log("presence: \(ip) 未应答 → 直接 ConnectFlow, 不等保活升级")
+                self.controller.connect(ref, features: self.features, reconnect: reconnect)
+            }
+        }
+    }
+
+    /// Turn an established presence hold into the formal connect: `upgrade_for_connect`
+    /// hands back a token registered on the held connection, so the phone keeps
+    /// showing this Mac. Falls back to a plain ConnectFlow if the upgrade fails.
+    /// The upgrade talks to the phone, so it runs off the main thread.
+    private func rideHold(_ p: PcCloudPresence, ref: DeviceRef, reconnect: Bool) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let token = p.upgrade_for_connect().toString()
             DispatchQueue.main.async {
@@ -584,7 +672,9 @@ final class AppModel: ObservableObject {
         autoConnectFailure = nil
         autoConnectTailscale = nil
         // Name-only ref: the transport isn't decided yet, and the status line
-        // shows `displayName`, which is the phone's name either way.
+        // shows `displayName`, which is the phone's name either way — plus the
+        // phase, since the ref has no route to show yet.
+        connectPhase = L("checking the cable…")
         state = .connecting(DeviceRef(transport: .usb, ip: nil, name: device.name))
 
         controller.probeUSB { [weak self] link in
@@ -594,49 +684,134 @@ final class AppModel: ObservableObject {
                 // through, they describe a cable that *is* plugged in.
                 log("自动连接: 有线可用 → USB")
                 self.autoConnectID = nil
+                self.connectPhase = nil
                 self.controller.connect(DeviceRef(transport: .usb, ip: nil, name: device.name),
                                         features: self.features, reconnect: false)
                 return
             }
-            // Whatever the remaining legs report, the user asked for "connect to
-            // this phone" and every route is now spent — so say that, once. When
-            // the cable was the fixable half, say *that* instead: a phone sitting
-            // on an unauthorized cable is one tap on the phone away from working,
-            // and "check the network" would send the user the wrong way.
-            let tailscale = device.tailscale.map { ts in
-                (ref: DeviceRef(transport: .lan, ip: ts, name: device.name, remote: true),
-                 failure: link == .unauthorized
-                    ? String(format: L("Can't reach %@ — allow USB debugging on the phone, or put it on this network"),
-                             device.menuLabel)
-                    : String(format: L("Can't reach %@ over USB, Wi-Fi or Tailscale — check it's awake and on a network"),
-                             device.menuLabel))
-            }
-            guard let ip = self.freshestIP(for: device) else {
-                if let ts = tailscale {
-                    log("自动连接: 无有线(\(link.rawValue)), 也没有已知的 Wi-Fi 地址 → Tailscale \(ts.ref.ip ?? "?")")
-                    self.autoConnectFailure = ts.failure
-                    self.controller.connect(ts.ref, features: self.features, reconnect: false)
-                    return
-                }
-                log("自动连接: 无有线, 也没有已知的 Wi-Fi 地址 → 失败")
-                self.autoConnectID = nil
-                self.state = .failed(String(format: L("Can't reach %@ — no cable, and no Wi-Fi address is known for it"),
-                                            device.menuLabel))
-                self.scheduleFailedReset()
-                return
-            }
-            log("自动连接: 无有线(\(link.rawValue)) → Wi-Fi \(ip)")
-            self.autoConnectFailure = link == .unauthorized
-                ? String(format: L("Can't reach %@ — allow USB debugging on the phone, or put it on this network"),
-                         device.menuLabel)
-                : String(format: L("Can't reach %@ over USB or Wi-Fi — check it's on the same network and awake"),
-                         device.menuLabel)
-            // A Tailscale address that is also the freshest Wi-Fi address would
-            // only be dialled twice.
-            self.autoConnectTailscale = tailscale.flatMap { $0.ref.ip == ip ? nil : $0 }
-            self.connectRidingPresence(DeviceRef(transport: .lan, ip: ip, name: device.name),
-                                       reconnect: false)
+            self.beginLanRoute(device, reconnect: false, cableUnauthorized: link == .unauthorized)
         }
+    }
+
+    /// Choose and start the LAN route for `device` after a 10191 probe: Wi-Fi
+    /// when the phone answers there, Tailscale when it doesn't but a Tailscale
+    /// address does, then the slower fall-throughs. The probe is what caps an
+    /// unreachable leg at ~3s instead of the ~20s a blind presence-upgrade +
+    /// ConnectFlow would take. Shared by the Connect button (`reconnect=false`)
+    /// and auto-reconnect (`reconnect=true`) so both fail fast and both fall to
+    /// Tailscale when the phone has left the LAN — the everyday "can't connect".
+    ///
+    /// A probe answer means: `open` — there and listening; `refused` — there but
+    /// 10191 is closed (it closes a while after a session ends), which the
+    /// ConnectFlow's own presence wake-up can reopen, so worth the ~2s dial but
+    /// not the presence hold's wait; `silent` — nothing there, no leg helps.
+    private func beginLanRoute(_ device: KnownDevice, reconnect: Bool, cableUnauthorized: Bool) {
+        let verb = reconnect ? "自动重连" : "自动连接"
+        let wifi = freshestIP(for: device)
+        // A Tailscale address that is also the freshest Wi-Fi address is one route.
+        let tsIP = device.tailscale.flatMap { $0 == wifi ? nil : $0 }
+        let tsRef = tsIP.map { DeviceRef(transport: .lan, ip: $0, name: device.name, remote: true) }
+        // The one message shown once every route is spent. A fixable cable points
+        // there instead — "check the network" would send the user the wrong way.
+        let allFailed = cableUnauthorized
+            ? String(format: L("Can't reach %@ — allow USB debugging on the phone, or put it on this network"),
+                     device.menuLabel)
+            : String(format: tsIP == nil
+                        ? L("Can't reach %@ over USB or Wi-Fi — check it's on the same network and awake")
+                        : L("Can't reach %@ over USB, Wi-Fi or Tailscale — check it's awake and on a network"),
+                     device.menuLabel)
+
+        // Is the attempt this belongs to still the current one?
+        let rgen = reconnectGen
+        let stillCurrent: () -> Bool = reconnect
+            ? { [weak self] in self?.reconnectGen == rgen && self?.autoReconnect == true && self?.reconnectDevice != nil }
+            : { [weak self] in self?.autoConnectID == device.id }
+
+        let goTailscale = {
+            guard let ref = tsRef else { return }
+            self.connectPhase = nil
+            if !reconnect { self.autoConnectFailure = allFailed }
+            self.controller.connect(ref, features: self.features, reconnect: reconnect)
+        }
+        // `ridePresence` goes through the hold (phone known present); off dials
+        // 10191 directly. `keepTailscale` only applies to the button flow — it
+        // stashes the Tailscale leg for `fallBackToTailscale` if Wi-Fi then fails;
+        // a reconnect just re-runs this on its next attempt and re-probes.
+        let goWiFi = { (ip: String, ridePresence: Bool, keepTailscale: Bool) in
+            self.connectPhase = nil
+            if !reconnect {
+                self.autoConnectFailure = allFailed
+                self.autoConnectTailscale = keepTailscale ? tsRef.map { (ref: $0, failure: allFailed) } : nil
+            }
+            let ref = DeviceRef(transport: .lan, ip: ip, name: device.name)
+            if ridePresence {
+                self.connectRidingPresence(ref, reconnect: reconnect)
+            } else {
+                self.controller.connect(ref, features: self.features, reconnect: reconnect)
+            }
+        }
+        // No route answered. The probe is the authoritative reachability test, so
+        // there is nothing to gain by dialling a doomed ConnectFlow — but it still
+        // counts as one attempt. The button reports it now; a reconnect hands the
+        // failure to its budget (`重连次数`, default 1) to retry or give up, so a
+        // dead phone stops fast instead of looping.
+        let fail = {
+            self.connectPhase = nil
+            if reconnect {
+                self.noteReconnectFailure(allFailed)
+            } else {
+                self.autoConnectID = nil
+                self.state = .failed(allFailed)
+                self.scheduleFailedReset()
+            }
+        }
+
+        guard wifi != nil || tsRef != nil else {
+            log("\(verb): 没有任何已知地址 → 失败")
+            if reconnect { giveUpReconnect(status: allFailed) } else {
+                autoConnectID = nil
+                state = .failed(String(format: L("Can't reach %@ — no cable, and no Wi-Fi address is known for it"),
+                                       device.menuLabel))
+                scheduleFailedReset()
+            }
+            return
+        }
+        // A hold already on the Wi-Fi address means the phone is there — no probe.
+        if let ip = wifi, presenceHolds(ip) {
+            log("\(verb): 保活在 \(ip) 上 → Wi-Fi")
+            goWiFi(ip, true, tsRef != nil)
+            return
+        }
+        connectPhase = tsIP == nil ? L("asking Wi-Fi…") : L("asking Wi-Fi and Tailscale…")
+        probeTCP([wifi, tsIP].compactMap { $0 }, port: 10191, timeout: 3) { [weak self] verdicts in
+            guard let self, stillCurrent() else { return }
+            let w = wifi.map { verdicts[$0] ?? .silent } ?? .silent
+            let t = tsIP.map { verdicts[$0] ?? .silent } ?? .silent
+            let tsUsable = t != .silent
+            guard let ip = wifi else { if tsUsable { goTailscale() } else { fail() }; return }
+            switch w {
+            case .open:
+                log("\(verb): Wi-Fi \(ip) 应答 → Wi-Fi")
+                goWiFi(ip, true, tsUsable)
+            case .refused:
+                log("\(verb): Wi-Fi \(ip) 在但 10191 没开 → 直接 ConnectFlow(带唤醒)")
+                goWiFi(ip, false, tsUsable)
+            case .silent:
+                if tsUsable {
+                    log("\(verb): Wi-Fi \(ip) 不应答, Tailscale \(tsIP!) → Tailscale")
+                    goTailscale()
+                } else {
+                    log("\(verb): Wi-Fi \(ip) 和 Tailscale \(tsIP ?? "无") 都不应答 → 失败")
+                    fail()
+                }
+            }
+        }
+    }
+
+    /// Whether the presence hold is up on `ip` right now — the phone is reachable
+    /// there by definition, and the connect will ride that connection.
+    private func presenceHolds(_ ip: String) -> Bool {
+        cloudPresence != nil && presencePhoneIP == ip && presenceStatus == "holding"
     }
 
     /// Take the Tailscale leg an auto-connect holds in reserve, if any: the Wi-Fi
@@ -709,6 +884,7 @@ final class AppModel: ObservableObject {
         autoConnectID = nil
         autoConnectFailure = nil
         autoConnectTailscale = nil
+        connectPhase = nil
         cancelReconnect()
         controller.cancel()
     }
@@ -742,6 +918,7 @@ final class AppModel: ObservableObject {
         // Re-read every published value. Each didSet writes the default back
         // to the store, which is fine, and none applies live — nothing is connected.
         autoReconnect = Store.autoReconnect
+        reconnectLimit = Store.reconnectAttempts
         clipboardEnabled = Store.clipboardEnabled
         clipboardDirection = Store.clipboardDirection
         verifyEnabled = Store.verifyEnabled
@@ -856,24 +1033,55 @@ final class AppModel: ObservableObject {
 
     private func fireReconnect(gen: Int, device: DeviceRef) {
         reconnectAttempts += 1
-        var dev = device
-        // In account mode the remembered LAN IP goes stale when the phone roams to
-        // another network. Prefer the current address the account device list
-        // reports for the same phone before dialing the old one. A Tailscale
-        // session stays on Tailscale: the list only ever carries the phone's Wi-Fi
-        // address, which is what this route exists to do without.
-        if dev.transport == .lan, dev.remote != true, cloudAccountActive, let name = device.name,
-           let cur = cloudPhones.first(where: { $0.name == name && !$0.ip.isEmpty }),
-           cur.ip != device.ip {
-            log("auto-reconnect: 设备列表新地址 \(cur.ip)(旧 \(device.ip ?? "?"))")
-            dev = DeviceRef(transport: .lan, ip: cur.ip, name: name)
-            reconnectDevice = dev   // keep dialing the fresh IP on later attempts
+        log("auto-reconnect attempt \(reconnectAttempts)/\(maxReconnectAttempts) → \(device.displayName)")
+        guard device.transport == .lan else {
+            controller.connect(device, features: features, reconnect: true)
+            return
         }
-        log("auto-reconnect attempt \(reconnectAttempts)/\(maxReconnectAttempts) → \(dev.displayName)")
-        if dev.transport == .lan {
-            connectRidingPresence(dev, reconnect: true)
+        // A Tailscale reconnect stays on Tailscale — the account list only ever
+        // carries the phone's Wi-Fi address, which this route exists to do without.
+        if device.remote == true {
+            connectRidingPresence(device, reconnect: true)
+            return
+        }
+        // Reuse the Connect button's probe-first decision: it tries the freshest
+        // Wi-Fi address, falls to the phone's Tailscale address when Wi-Fi is
+        // unreachable (a phone that left the LAN — the common "can't connect"),
+        // and caps an unreachable attempt at the ~3s probe. Fall back to the plain
+        // path only when the phone isn't in the roster (nothing to look tailscale
+        // up on).
+        if let known = knownDevices.first(where: { $0.matches(device) })
+            ?? device.name.flatMap({ n in knownDevices.first { $0.name == n } }) {
+            beginLanRoute(known, reconnect: true, cableUnauthorized: false)
         } else {
-            controller.connect(dev, features: features, reconnect: true)
+            connectRidingPresence(device, reconnect: true)
+        }
+    }
+
+    /// One reconnect attempt failed — whether a real connect error or a probe that
+    /// found the phone unreachable. Retry (with backoff) while the budget
+    /// (`重连次数`, default 1) allows, else give up. USB is the exception: its
+    /// failure may just be a cable not plugged in yet, so it keeps a quiet watch
+    /// via `scheduleReconnect`'s own cable probe regardless of the count.
+    private func noteReconnectFailure(_ message: String) {
+        guard let dev = reconnectDevice else {
+            // User-initiated connect failed. The dropdown may be closed, so surface
+            // the reason as a notification, and don't leave the status stuck on
+            // "failed" forever.
+            Notifier.postConnectFailure(message)
+            scheduleFailedReset()
+            return
+        }
+        lastReconnectError = message
+        // Auto-reconnect switched off under a running attempt: the user ended this
+        // themselves, so there's nothing to announce.
+        guard autoReconnect else { giveUpReconnect(status: nil, reason: message); return }
+        if dev.transport == .usb || reconnectAttempts < maxReconnectAttempts {
+            let backoff = min(8.0, pow(2.0, Double(max(1, reconnectAttempts) - 1)))
+            log("auto-reconnect retry in \(Int(backoff))s (\(message))")
+            scheduleReconnect(gen: reconnectGen, delay: backoff)
+        } else {
+            giveUpReconnect(status: retriesExhausted(dev), reason: message)
         }
     }
 
@@ -909,6 +1117,9 @@ final class AppModel: ObservableObject {
         cancelReconnect()
         mirrorLink = showing ? .lost : .live
         if let status {
+            // The status says the budget ran out; the reason is what each attempt
+            // actually hit, which is what someone copying the failure wants.
+            failureDetail = reason
             state = .failed(status)
             scheduleFailedReset()
         }
@@ -1114,8 +1325,12 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             var st = st
             // Sanitize once, up front: nothing below (menu status, notification,
-            // give-up message) should ever see the raw core/adb text.
-            if case .failed(let raw) = st { st = .failed(self.friendlyConnectError(raw)) }
+            // give-up message) should ever see the raw core/adb text — it stays
+            // available as the detail behind the menu's copy action.
+            if case .failed(let raw) = st {
+                self.failureDetail = raw
+                st = .failed(self.friendlyConnectError(raw))
+            }
             // An auto-connect whose Wi-Fi leg just failed may still have the
             // Tailscale leg to go — that is not a failure the user needs to see.
             if case .failed = st, self.fallBackToTailscale() { return }
@@ -1185,28 +1400,7 @@ final class AppModel: ObservableObject {
                 self.fileTransferNote = nil
             case .failed(let message):
                 // A reconnect attempt failed: back off and retry, or give up.
-                guard let dev = self.reconnectDevice else {
-                    // User-initiated connect failed. The dropdown may be closed, so
-                    // surface the reason as a notification, and don't leave the menu
-                    // status stuck on "failed" forever.
-                    Notifier.postConnectFailure(message)
-                    self.scheduleFailedReset()
-                    break
-                }
-                self.lastReconnectError = message
-                let backoff = min(8.0, pow(2.0, Double(max(1, self.reconnectAttempts) - 1)))
-                // Auto-reconnect was switched off under a running attempt: the
-                // user ended this themselves, so there's nothing to announce.
-                guard self.autoReconnect else { self.giveUpReconnect(status: nil, reason: message); break }
-                // USB skips the budget check here: whether this failure even counts
-                // depends on the cable, and only the probe in scheduleReconnect
-                // knows that. Everything else gives up once the budget is spent.
-                if dev.transport == .usb || self.reconnectAttempts < self.maxReconnectAttempts {
-                    log("auto-reconnect retry in \(Int(backoff))s (\(message))")
-                    self.scheduleReconnect(gen: self.reconnectGen, delay: backoff)
-                } else {
-                    self.giveUpReconnect(status: self.retriesExhausted(dev), reason: message)
-                }
+                self.noteReconnectFailure(message)
             default:
                 break
             }

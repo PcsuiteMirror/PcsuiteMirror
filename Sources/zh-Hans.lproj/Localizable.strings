@@ -4,10 +4,16 @@
 "Reconnecting…" = "正在重连…";
 "Connected" = "已连接";
 "Connection failed" = "连接失败";
+"Last error" = "上次错误";
+"click to copy details" = "点击复制详情";
 
 /* transport labels */
 "via USB" = "USB";
 "via Wi-Fi" = "无线";
+/* 自动连接选定线路前的阶段（状态行） */
+"checking the cable…" = "探测数据线…";
+"asking Wi-Fi…" = "探测无线…";
+"asking Wi-Fi and Tailscale…" = "探测无线和 Tailscale…";
 
 /* connect actions */
 "Connect via USB" = "通过 USB 连接";
@@ -202,3 +208,5 @@
 "Phone not reachable — retrying" = "手机不在线，正在重试";
 "Not available: %@" = "不可用：%@";
 "Phone" = "手机";
+"Reconnect attempts" = "重连次数";
+"Each attempt checks whether the phone is reachable before dialing, so 1 is usually enough — a phone that isn't on the network won't appear on a retry." = "每次尝试都会先探测手机是否可达再拨号，所以 1 次通常就够了——手机不在网络上时，重试也不会突然出现。";
