@@ -6,8 +6,9 @@ enum ConnState: Equatable {
     case disconnected
     case connecting(DeviceRef)
     case reconnecting(DeviceRef)
-    /// Auto-reconnect is armed for a USB device, but there is no phone on the
-    /// cable yet. Produced by `AppModel`, not the controller: nothing is in
+    /// Auto-reconnect is armed but the phone isn't there: no phone on the USB
+    /// cable yet, or a Wi-Fi phone that dropped out and is being checked for
+    /// periodically. Produced by `AppModel`, not the controller: nothing is in
     /// flight, we're only watching — so it must not read as "connecting".
     case waitingForPhone(DeviceRef)
     case connected(DeviceRef)
@@ -53,6 +54,8 @@ struct ConnectFeatures {
 final class SessionController {
     // Delivered on the main queue.
     var onState: ((ConnState) -> Void)?
+    /// `(streaming, layer)` — the layer is nil when not streaming, and also for
+    /// an audio-only stream (`MirrorSettings.display` off): nothing draws it.
     var onMirroring: ((Bool, AVSampleBufferDisplayLayer?) -> Void)?
     var onFormat: ((Int, Int) -> Void)?
     /// Throttled playback stats `(fps, pipelineLatencyMs)`, delivered on the main
@@ -456,9 +459,12 @@ final class SessionController {
         guard let s = session, screen == nil else { return }
         do {
             let sc = try s.start_screen(settings.maxSize, settings.bitRate, settings.frameRate, settings.audio)
-            let f = HEVCFeeder()
-                f.onFormat = { [weak self] w, h in self?.emit { self?.onFormat?(w, h) } }
-                f.onStats = { [weak self] fps, lat in self?.onStats?(fps, lat) }   // already on main
+                // Audio-only (`display` off): no feeder at all. The frame pump still
+                // has to drain the video — it shares the core's reader with the audio
+                // — but every frame goes straight to the floor, undecoded.
+                let f: HEVCFeeder? = settings.display ? HEVCFeeder() : nil
+                f?.onFormat = { [weak self] w, h in self?.emit { self?.onFormat?(w, h) } }
+                f?.onStats = { [weak self] fps, lat in self?.onStats?(fps, lat) }   // already on main
                 screen = sc
                 feeder = f
                 mirrorGen += 1
@@ -487,7 +493,7 @@ final class SessionController {
                                 }
                             }
                         }
-                        f.handle(Data(bytes: v.as_ptr(), count: n))
+                        f?.handle(Data(bytes: v.as_ptr(), count: n))
                     }
                     done.signal()
                     // The stream ended. If we never asked it to stop (the generation
@@ -584,11 +590,11 @@ final class SessionController {
 
                 if settings.audio { rearmPhoneAudio(gen: gen) }
 
-                emitMirroring(true, f.layer)
+                emitMirroring(true, f?.layer)
                 scheduleMirrorWatchdog(gen: gen, settings: settings)
                 // Banner labels the per-second `mirror_stats` / `mirror-pipe` lines that
                 // follow, so a captured log self-identifies its transport + encoder params.
-                log("mirroring ✓ transport=\(currentDevice?.transport.rawValue ?? "?") maxSize=\(settings.maxSize) bitrate=\(settings.bitRate) fps=\(settings.frameRate) audio=\(settings.audio)")
+                log("mirroring ✓ transport=\(currentDevice?.transport.rawValue ?? "?") maxSize=\(settings.maxSize) bitrate=\(settings.bitRate) fps=\(settings.frameRate) audio=\(settings.audio)\(settings.display ? "" : " display=off (audio only)")")
             } catch {
                 emitMirroring(false, nil)
                 log("start mirror failed: \(ffiMessage(error))")

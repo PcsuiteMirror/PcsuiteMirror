@@ -192,11 +192,17 @@ struct ReconnectOverlay: View {
                         ProgressView()
                             .controlSize(.large)
                             .tint(.white)
-                        Text(L("正在重新连接…"))
+                        Text(L("Reconnecting…"))
                     } else {
                         Image(systemName: "wifi.slash")
                             .font(.system(size: 40, weight: .semibold))
-                        Text(L("连接已断开"))
+                        Text(L("Connection lost"))
+                        // The lost-phone watch: still checking for it, quietly.
+                        if model.link == .waiting {
+                            Text(L("Reconnects when the phone is back on the network"))
+                                .font(.system(size: 12))
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
                     }
                 }
                 .font(.system(size: 15, weight: .medium))

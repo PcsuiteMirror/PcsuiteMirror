@@ -7,6 +7,7 @@ import SwiftUI
 enum MirrorLink: Equatable {
     case live          // streaming normally (or no mirror window open)
     case reconnecting  // the link dropped; an auto-reconnect is in progress
+    case waiting       // the link dropped; the phone is being watched for (lost-phone watch)
     case lost          // the link dropped and we are not (or no longer) reconnecting
 }
 
@@ -69,7 +70,7 @@ final class AppModel: ObservableObject {
     @Published var autoReconnect: Bool {
         didSet {
             Store.autoReconnect = autoReconnect
-            guard !autoReconnect, reconnectDevice != nil else { return }
+            guard !autoReconnect, reconnectDevice != nil || lostDevice != nil else { return }
             let showing = mirror.isShowing
             cancelConnect()
             mirrorLink = showing ? .lost : .live
@@ -113,6 +114,11 @@ final class AppModel: ObservableObject {
     /// Mac-side mute: the phone keeps streaming, this Mac just stays silent.
     /// Session-only (see `setAudioMuted`).
     @Published private(set) var audioMuted = false
+    /// The stream is open for the phone's audio alone: no window, and the video
+    /// the phone sends alongside is dropped undecoded (see `startAudioOnly`).
+    /// Outlives a dropped link like an open mirror window does, so a recovered
+    /// session resumes it; cleared when the user ends the session or the wait.
+    @Published private(set) var audioOnly = false
     @Published private(set) var lastDevice: DeviceRef?
     /// The remembered-device roster (device-centric; most-recent first).
     @Published private(set) var knownDevices: [KnownDevice]
@@ -171,6 +177,23 @@ final class AppModel: ObservableObject {
     /// Why the last attempt of this sequence failed (already user-facing), kept so
     /// giving up can say so. Cleared whenever the sequence parks or restarts.
     private var lastReconnectError: String?
+
+    // Lost-phone watch (main thread). A Wi-Fi session that dropped on its own —
+    // the link went; the phone didn't end it, the user didn't — and that the
+    // bounded reconnect then couldn't reach is remembered here, and its address
+    // is checked every `lostWatchInterval` (sooner when the account list reports
+    // it somewhere new, or the presence hold reaches it). A phone that walked out
+    // of Wi-Fi range walks back in eventually, and one that answers is worth
+    // another reconnect sequence. USB has its own watch: the cable poll.
+    private var lostDevice: DeviceRef?
+    private var lostWatchTimer: Timer?
+    private var lostWatchGen = 0
+    private var lostProbeInFlight = false
+    /// Reconnects the watch has dialled without success; stretches the check
+    /// interval so a phone that is on the network but won't take a session
+    /// isn't dialled every few seconds. Reset by the next loss.
+    private var lostWatchDials = 0
+    private let lostWatchInterval: TimeInterval = 20
 
     /// Set by the mirror window: receives the phone's caret position (mirror
     /// pixel space) or nil when no field is focused. Plain closure (not
@@ -290,8 +313,15 @@ final class AppModel: ObservableObject {
         case .disconnected: return L("Disconnected")
         case .connecting(let d): return progressLine(L("Connecting…"), d)
         case .reconnecting(let d): return progressLine(L("Reconnecting…"), d)
-        case .waitingForPhone: return L("Waiting for a phone over USB…")
-        case .connected(let d): return "\(L("Connected")) · \(d.displayName)"
+        // Two quiet waits: the USB cable poll, and the lost-phone watch on a
+        // Wi-Fi phone that dropped out (see `beginLostWatch`).
+        case .waitingForPhone(let d):
+            return d.transport == .usb
+                ? L("Waiting for a phone over USB…")
+                : String(format: L("Waiting for %@ to come back…"), d.displayName)
+        case .connected(let d):
+            let line = "\(L("Connected")) · \(d.displayName)"
+            return audioOnly ? "\(line) · \(L("audio only"))" : line
         // Just the fact: a menu is as wide as its widest row, and a core error
         // runs to a full sentence. The text itself is one click away (copyFailure)
         // and in the banner that announced it.
@@ -424,12 +454,16 @@ final class AppModel: ObservableObject {
                 self.cloudRefreshInFlight = false
                 guard self.cloudAccountActive, let phones else { return }
                 let key = { (p: CloudDevice) in [p.id, p.name, p.ip] }
-                if phones.map(key) != self.cloudPhones.map(key) {
+                let changed = phones.map(key) != self.cloudPhones.map(key)
+                if changed {
                     self.cloudPhones = phones
                     log("account phone list: \(phones.map { "\($0.name)@\($0.ip)" }.joined(separator: ", "))")
                 }
                 // (Re)hold presence to the account phone; a roamed IP restarts it.
                 self.syncPresenceHold()
+                // A phone we lost that now reports a new address may be back: ask
+                // it now rather than waiting out the watch's own interval.
+                if changed { self.probeLostDevice() }
             }
         }
     }
@@ -447,9 +481,12 @@ final class AppModel: ObservableObject {
         //
         // A connect *we* start is still the old path (`pcsuite_connect_lan` runs its own
         // ConnectFlow on a new connection), so presence steps aside for those.
+        // A wait (the cable poll, the lost-phone watch) has nothing in flight, so
+        // the hold comes back then — and for the lost watch it doubles as the
+        // quickest sign the phone is back (see `probeLostDevice`).
         let sessionActive: Bool = {
             switch state {
-            case .disconnected, .failed: return false
+            case .disconnected, .failed, .waitingForPhone: return false
             default: return true
             }
         }()
@@ -482,7 +519,11 @@ final class AppModel: ObservableObject {
         presenceStatusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self, let p = self.cloudPresence else { return }
             let s = p.status().toString()
-            if s != self.presenceStatus { self.presenceStatus = s }
+            if s != self.presenceStatus {
+                self.presenceStatus = s
+                // The hold reaching the phone is the surest sign a lost one is back.
+                if s == "holding" { self.probeLostDevice() }
+            }
             // The hold re-resolves the phone's address on its own when it moves (pocketed,
             // off the Wi-Fi, back on a new lease) — follow it, or a connect we start would
             // compare against a stale address and open a second 10191 instead of riding
@@ -864,6 +905,8 @@ final class AppModel: ObservableObject {
             Store.lastDevice = nil
         }
         if activeDeviceId == device.id { activeDeviceId = nil }
+        // A forgotten phone isn't waited for either.
+        if let lost = lostDevice, device.matches(lost) { cancelConnect() }
     }
 
     /// QR pairing (local `ls=true`): show a QR for the phone to scan; on scan the
@@ -885,6 +928,7 @@ final class AppModel: ObservableObject {
         autoConnectFailure = nil
         autoConnectTailscale = nil
         connectPhase = nil
+        audioOnly = false          // the user ended the wait; nothing to resume
         cancelReconnect()
         controller.cancel()
     }
@@ -933,6 +977,7 @@ final class AppModel: ObservableObject {
         frameRate = Store.frameRate
         audioEnabled = Store.mirrorAudio
         audioMuted = false
+        audioOnly = false
         lastDevice = nil
         knownDevices = []
         activeDeviceId = nil
@@ -976,8 +1021,15 @@ final class AppModel: ObservableObject {
         if phoneEnded { log("phone ended the session — not reconnecting") }
         guard autoReconnect, !phoneEnded else {
             mirrorLink = mirror.isShowing ? .lost : .live
+            audioOnly = false              // nothing will bring the stream back
             return
         }
+        // A Wi-Fi link that dropped under us: the phone walked away (or its
+        // network did), which is exactly the loss that undoes itself later. If
+        // the sequence below can't reach it, the lost-phone watch takes over
+        // (see `giveUpReconnect`). A cable has its own watch.
+        lostDevice = device.transport == .lan ? device : nil
+        lostWatchDials = 0
         beginReconnect(to: device, delay: 0.5)
     }
 
@@ -1050,12 +1102,17 @@ final class AppModel: ObservableObject {
         // and caps an unreachable attempt at the ~3s probe. Fall back to the plain
         // path only when the phone isn't in the roster (nothing to look tailscale
         // up on).
-        if let known = knownDevices.first(where: { $0.matches(device) })
-            ?? device.name.flatMap({ n in knownDevices.first { $0.name == n } }) {
+        if let known = rosterEntry(for: device) {
             beginLanRoute(known, reconnect: true, cableUnauthorized: false)
         } else {
             connectRidingPresence(device, reconnect: true)
         }
+    }
+
+    /// The remembered phone a connect target refers to, if it is in the roster.
+    private func rosterEntry(for device: DeviceRef) -> KnownDevice? {
+        knownDevices.first(where: { $0.matches(device) })
+            ?? device.name.flatMap({ n in knownDevices.first { $0.name == n } })
     }
 
     /// One reconnect attempt failed — whether a real connect error or a probe that
@@ -1114,8 +1171,20 @@ final class AppModel: ObservableObject {
             log("auto-reconnect gave up: \(reason ?? status ?? "")")
         }
         let showing = mirror.isShowing
+        let lost = lostDevice
         cancelReconnect()
         mirrorLink = showing ? .lost : .live
+        // The Wi-Fi phone that dropped out isn't reachable right now. Rather
+        // than write it off, keep checking its address — as quietly as the USB
+        // cable watch — and dial back in when it answers. Only for a loss (not
+        // the login-time connect) whose sequence ran out (`status` set — nil
+        // means the user switched auto-reconnect off) and that has an address
+        // to check at all.
+        if let lost, status != nil, autoReconnect, !lostHosts(for: lost).isEmpty {
+            beginLostWatch(lost, reason: reason ?? status)
+            return
+        }
+        audioOnly = false                  // the stream isn't coming back on its own
         if let status {
             // The status says the budget ran out; the reason is what each attempt
             // actually hit, which is what someone copying the failure wants.
@@ -1128,6 +1197,114 @@ final class AppModel: ObservableObject {
     /// The status shown when the retry budget runs out, whatever the last error was.
     private func retriesExhausted(_ device: DeviceRef) -> String {
         String(format: L("couldn't reach %@ after several attempts"), device.displayName)
+    }
+
+    // MARK: - Lost-phone watch (a Wi-Fi phone that dropped out, checked until it's back)
+
+    /// Park on the lost phone: a quiet waiting status, and a periodic check of
+    /// its addresses (`probeLostDevice`) until one answers or the user calls it
+    /// off ("Stop waiting", a connect of their own, auto-reconnect switched off).
+    private func beginLostWatch(_ device: DeviceRef, reason: String?) {
+        lostDevice = device
+        lostWatchGen += 1
+        lostProbeInFlight = false
+        state = .waitingForPhone(device)
+        if mirror.isShowing { mirrorLink = .waiting }
+        syncPresenceHold()            // the wait frees the hold to come back
+        let interval = lostWatchDelay
+        log("lost watch: \(device.displayName) 不在线 → 每 \(Int(interval))s 探测 \(lostHosts(for: device).joined(separator: " / "))\(reason.map { " (\($0))" } ?? "")")
+        lostWatchTimer?.invalidate()
+        lostWatchTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.probeLostDevice()
+        }
+    }
+
+    /// The check interval: `lostWatchInterval`, doubling per unsuccessful dial
+    /// (capped at 2 min) so a phone that is on the network but won't take a
+    /// session isn't dialled every few seconds. Back to the base after a loss.
+    private var lostWatchDelay: TimeInterval {
+        min(120, lostWatchInterval * pow(2.0, Double(min(lostWatchDials, 3))))
+    }
+
+    /// `lostWatchDials` deliberately survives: a dial the watch fired ends here
+    /// (via `cancelReconnect`) on its way back to the watch, and the count is
+    /// what slows the next one down. A fresh loss resets it.
+    private func stopLostWatch() {
+        lostWatchGen += 1
+        lostWatchTimer?.invalidate()
+        lostWatchTimer = nil
+        lostProbeInFlight = false
+        lostDevice = nil
+    }
+
+    /// The addresses worth checking for a lost phone: the one the account list
+    /// reports now (it knows where a roamed phone went), the remembered Wi-Fi
+    /// one, its Tailscale one, and the one the session was on. The same
+    /// addresses `beginLanRoute` chooses between once the reconnect runs — but
+    /// looked up without `freshestIP`'s log line, which a check every 20s would
+    /// repeat for as long as the phone is away.
+    private func lostHosts(for device: DeviceRef) -> [String] {
+        var hosts: [String] = []
+        if let known = rosterEntry(for: device) {
+            if cloudAccountActive, !known.name.isEmpty,
+               let cur = cloudPhones.first(where: { $0.name == known.name && !$0.ip.isEmpty }) {
+                hosts.append(cur.ip)
+            }
+            if let ip = known.lastIP, !ip.isEmpty { hosts.append(ip) }
+            if let ts = known.tailscale { hosts.append(ts) }
+        }
+        if let ip = device.ip, !ip.isEmpty { hosts.append(ip) }
+        var seen = Set<String>()
+        return hosts.filter { seen.insert($0).inserted }
+    }
+
+    /// One check of the lost phone. Reachable — 10191 answering, or there but
+    /// closed (it closes a while after a session ends; the ConnectFlow's wake-up
+    /// reopens it) — starts a reconnect sequence; silent keeps waiting. Runs off
+    /// the watch timer, off the account list reporting a new address, and off
+    /// the presence hold reaching the phone. Cheap enough to call on a hunch:
+    /// one SYN per address, and never two checks at once.
+    private func probeLostDevice() {
+        guard let dev = lostDevice, autoReconnect, isWaitingForPhone, !lostProbeInFlight else { return }
+        // The hold is a live 10191 connection: up means the phone is there.
+        if presenceReaches(dev) {
+            log("lost watch: 保活已连上 \(presencePhoneIP) → 重连 \(dev.displayName)")
+            reconnectLostDevice(dev)
+            return
+        }
+        let hosts = lostHosts(for: dev)
+        guard !hosts.isEmpty else { return }
+        lostProbeInFlight = true
+        let gen = lostWatchGen
+        probeTCP(hosts, port: 10191, timeout: 3) { [weak self] verdicts in
+            guard let self else { return }
+            self.lostProbeInFlight = false
+            guard self.lostWatchGen == gen, self.lostDevice == dev, self.isWaitingForPhone else { return }
+            let back = hosts.filter { (verdicts[$0] ?? .silent) != .silent }
+            guard !back.isEmpty else { return }      // still away; the next tick asks again
+            log("lost watch: \(back.joined(separator: " / ")) 应答 → 重连 \(dev.displayName)")
+            self.reconnectLostDevice(dev)
+        }
+    }
+
+    /// Whether the presence hold is up to this phone right now — by address, or
+    /// by the name the account list gives the address it holds.
+    private func presenceReaches(_ dev: DeviceRef) -> Bool {
+        guard cloudPresence != nil, presenceStatus == "holding", !presencePhoneIP.isEmpty else { return false }
+        if dev.ip == presencePhoneIP { return true }
+        guard let n = dev.name, !n.isEmpty else { return false }
+        return cloudPhones.contains { $0.ip == presencePhoneIP && $0.name == n }
+    }
+
+    /// The phone answered: run the ordinary reconnect sequence at it. Success
+    /// ends the watch (`cancelReconnect` on `.connected`); a failure lands back
+    /// in `giveUpReconnect`, which parks on the watch again, a step slower.
+    private func reconnectLostDevice(_ dev: DeviceRef) {
+        lostWatchTimer?.invalidate()
+        lostWatchTimer = nil
+        lostWatchDials += 1
+        state = .reconnecting(dev)    // the route probe runs before the controller reports
+        beginReconnect(to: dev, delay: 0)
     }
 
     /// Turn a raw core failure into something worth showing a person.
@@ -1172,6 +1349,7 @@ final class AppModel: ObservableObject {
         cablePolls = 0
         reconnectDevice = nil
         lastReconnectError = nil
+        stopLostWatch()
         mirrorLink = .live
         // The cable watch is the one state that would otherwise outlive its
         // sequence: nothing else will move it off "waiting".
@@ -1223,7 +1401,7 @@ final class AppModel: ObservableObject {
         resolution = t.0; Store.resolution = t.0
         bitrate = t.1; Store.bitrate = t.1
         frameRate = t.2; Store.frameRate = t.2
-        if mirroring { controller.restartMirror(settings: mirrorSettings) }
+        restartPictureIfLive()
     }
 
     /// Change mirror resolution; restarts the live stream if mirroring.
@@ -1231,7 +1409,7 @@ final class AppModel: ObservableObject {
         guard r != resolution else { return }
         resolution = r
         Store.resolution = r
-        if mirroring { controller.restartMirror(settings: mirrorSettings) }
+        restartPictureIfLive()
     }
 
     /// Change mirror bitrate; restarts the live stream if mirroring.
@@ -1239,7 +1417,7 @@ final class AppModel: ObservableObject {
         guard b != bitrate else { return }
         bitrate = b
         Store.bitrate = b
-        if mirroring { controller.restartMirror(settings: mirrorSettings) }
+        restartPictureIfLive()
     }
 
     /// Change mirror frame rate; restarts the live stream if mirroring.
@@ -1247,7 +1425,7 @@ final class AppModel: ObservableObject {
         guard f != frameRate else { return }
         frameRate = f
         Store.frameRate = f
-        if mirroring { controller.restartMirror(settings: mirrorSettings) }
+        restartPictureIfLive()
     }
 
     /// Route the phone's audio to this Mac (on) or leave it on the phone (off).
@@ -1259,6 +1437,9 @@ final class AppModel: ObservableObject {
         guard on != audioEnabled else { return }
         audioEnabled = on
         Store.mirrorAudio = on
+        // An audio-only stream exists for the audio; sending that back to the
+        // phone is the same as ending it.
+        if !on, audioOnly { stopAudioOnly(); return }
         controller.setAudioToPC(on)
     }
 
@@ -1275,8 +1456,63 @@ final class AppModel: ObservableObject {
     func toggleAudioMuted() { setAudioMuted(!audioMuted) }
 
     /// Open the mirror window (which begins mirroring) / close it (which stops).
-    func openMirror() { mirror.show() }
-    func closeMirror() { mirror.close() }
+    /// An audio-only stream gives way to the picture: it is stopped, and the
+    /// window's own start — queued behind the stop on the controller's serial
+    /// queue — opens a full one, audio included (the routing is unchanged).
+    func openMirror() {
+        if audioOnly {
+            audioOnly = false
+            controller.stopMirror()
+            log("audio-only stream → mirror window")
+        }
+        mirror.show()
+    }
+    /// Close the picture — or, with no window up, end an audio-only stream: the
+    /// phone's own 「关闭投屏」 lands here too, and to the phone that stream is a cast.
+    func closeMirror() {
+        if audioOnly { stopAudioOnly() } else { mirror.close() }
+    }
+
+    /// The mirror picture is on screen (as opposed to an audio-only stream).
+    var pictureShowing: Bool { mirroring && !audioOnly }
+
+    /// Encoder settings for an audio-only stream. The phone streams its audio
+    /// only on an open mirror stream, so one is opened at the cheapest settings
+    /// known to work; the video is dropped on arrival, so nothing about it
+    /// matters but its cost. Audio on regardless of the routing preference —
+    /// audio here is the whole point (`startAudioOnly` aligns the preference).
+    private var audioOnlySettings: MirrorSettings {
+        MirrorSettings(maxSize: MirrorResolution.low.maxSize, bitRate: MirrorBitrate.m4.bps,
+                       frameRate: MirrorFrameRate.fps30.fps, audio: true, display: false)
+    }
+
+    /// Play the phone's audio on this Mac without showing its screen — music or
+    /// a call with the phone left in a pocket. To the phone this is an ordinary
+    /// cast: its speaker goes quiet and its 「投屏中」 notice shows. With the
+    /// mirror window already up there is nothing to open; the audio is simply
+    /// routed here.
+    func startAudioOnly() {
+        guard isConnected else { return }
+        if !audioEnabled { setAudio(true) }   // persisted, like the menu's own switch
+        guard !mirror.isShowing, !audioOnly else { return }
+        audioOnly = true
+        controller.startMirror(settings: audioOnlySettings)
+        log("audio-only stream: starting (no picture)")
+    }
+
+    /// End an audio-only stream; the phone's speaker comes back.
+    func stopAudioOnly() {
+        guard audioOnly else { return }
+        audioOnly = false
+        controller.stopMirror()
+        log("audio-only stream: stopped")
+    }
+
+    /// Apply changed encoder knobs to a live picture. An audio-only stream has
+    /// its own fixed settings, so it is left alone.
+    private func restartPictureIfLive() {
+        if pictureShowing { controller.restartMirror(settings: mirrorSettings) }
+    }
 
     /// Open a blank mirror window with NO phone connection, for UI testing of the
     /// window/hover chrome. Faked video size drives the aspect layout; the surface shows
@@ -1390,9 +1626,12 @@ final class AppModel: ObservableObject {
                 // Every way in ends here — a click in the menu, the auto-reconnect,
                 // the phone's own 「连接」 — and the menu is closed for most of them.
                 if self.notifyOnConnect { Notifier.postConnected(d) }
-                // Resume mirroring if the window is still open after a recovered drop.
+                // Resume mirroring if the window is still open after a recovered
+                // drop — or the audio-only stream, if that is what was running.
                 if self.mirror.isShowing && !self.mirroring {
                     self.controller.startMirror(settings: self.mirrorSettings)
+                } else if self.audioOnly && !self.mirroring {
+                    self.controller.startMirror(settings: self.audioOnlySettings)
                 }
             case .disconnected:
                 self.deviceInfo = nil

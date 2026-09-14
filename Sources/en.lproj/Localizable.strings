@@ -63,6 +63,9 @@
 "Move audio to this Mac" = "Move audio to this Mac";
 "Move audio back to phone" = "Move audio back to phone";
 "Mute this Mac" = "Mute this Mac";
+"Play phone audio only (no picture)" = "Play phone audio only (no picture)";
+"Stop playing phone audio" = "Stop playing phone audio";
+"audio only" = "audio only";
 "Unmute this Mac" = "Unmute this Mac";
 "The phone mutes its own speaker while streaming audio." = "The phone mutes its own speaker while streaming audio.";
 "Show FPS & latency" = "Show FPS & latency";
@@ -110,6 +113,11 @@
 "Waiting for a phone over USB…" = "Waiting for a phone over USB…";
 "Stop reconnecting" = "Stop reconnecting";
 "Stop waiting" = "Stop waiting";
+"Waiting for %@ to come back…" = "Waiting for %@ to come back…";
+
+/* mirror-window link overlay */
+"Connection lost" = "Connection lost";
+"Reconnects when the phone is back on the network" = "Reconnects when the phone is back on the network";
 "No phone over USB — plug in the cable and allow USB debugging on the phone" = "No phone over USB — plug in the cable and allow USB debugging on the phone";
 "adb not found — install Android platform-tools to connect over USB" = "adb not found — install Android platform-tools to connect over USB";
 "The phone didn't answer over USB — unlock it, keep the screen on, and try again" = "The phone didn't answer over USB — unlock it, keep the screen on, and try again";

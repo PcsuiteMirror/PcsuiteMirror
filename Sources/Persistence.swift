@@ -192,6 +192,10 @@ struct MirrorSettings: Equatable {
     var bitRate: Int64
     var frameRate: Int64
     var audio: Bool
+    /// Decode and show the video. Off for an audio-only stream: the phone only
+    /// streams its audio on an open mirror stream, so one is opened anyway, but
+    /// the frames are dropped on arrival — no decoder, no display layer.
+    var display: Bool = true
 }
 
 /// Phone facts from the `/base-info` gateway (storage capacity, model, OS) — the

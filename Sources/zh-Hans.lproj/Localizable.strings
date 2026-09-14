@@ -63,6 +63,9 @@
 "Move audio to this Mac" = "声音流转到本 Mac";
 "Move audio back to phone" = "声音转回手机";
 "Mute this Mac" = "本 Mac 静音";
+"Play phone audio only (no picture)" = "只播放手机声音（不投屏画面）";
+"Stop playing phone audio" = "停止播放手机声音";
+"audio only" = "仅声音";
 "Unmute this Mac" = "取消本 Mac 静音";
 "The phone mutes its own speaker while streaming audio." = "传输声音期间手机自身扬声器会静音。";
 "Show FPS & latency" = "显示 FPS 与延迟";
@@ -136,6 +139,11 @@
 "Waiting for a phone over USB…" = "等待手机通过 USB 接入…";
 "Stop reconnecting" = "停止重连";
 "Stop waiting" = "停止等待";
+"Waiting for %@ to come back…" = "等待 %@ 重新上线…";
+
+/* 投屏窗口的连接状态浮层 */
+"Connection lost" = "连接已断开";
+"Reconnects when the phone is back on the network" = "手机回到网络后会自动重连";
 "No phone over USB — plug in the cable and allow USB debugging on the phone" = "USB 上没有手机 — 请插好数据线并在手机上允许 USB 调试";
 "adb not found — install Android platform-tools to connect over USB" = "未找到 adb — 请安装 Android platform-tools 后再使用 USB 连接";
 "The phone didn't answer over USB — unlock it, keep the screen on, and try again" = "手机在 USB 上没有响应 — 请解锁手机、保持屏幕常亮后重试";
