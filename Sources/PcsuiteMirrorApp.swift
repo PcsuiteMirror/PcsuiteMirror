@@ -9,7 +9,10 @@ struct PcsuiteMirrorApp: App {
 
     /// First thing to run: the model below logs as it comes up, and so does the
     /// delegate, so the log has to have somewhere to go before either exists.
-    init() { LogFile.captureStderrIfDiscarded() }
+    init() {
+        LogFile.captureStderrIfDiscarded()
+        SingleInstance.exitIfAlreadyRunning()
+    }
 
     var body: some Scene {
         // Standard menu-bar dropdown (native NSMenu): the content is built from
@@ -20,6 +23,27 @@ struct PcsuiteMirrorApp: App {
         } label: {
             Image(systemName: model.menuBarSymbol)
         }
+    }
+}
+
+/// One running copy per bundle id.
+///
+/// Clicking one of our banners makes the system launch the app by bundle id, and
+/// when several copies are installed (a dev build next to /Applications) it picks
+/// its own — not necessarily the one running. A second instance is worse than
+/// useless: its auto-reconnect over USB force-stops the phone app, which drops the
+/// first instance's session, and the two then keep knocking each other off. So a
+/// late arrival hands focus to the running copy and leaves before it builds the
+/// model (which starts connecting).
+enum SingleInstance {
+    static func exitIfAlreadyRunning() {
+        guard let id = Bundle.main.bundleIdentifier else { return }
+        let me = ProcessInfo.processInfo.processIdentifier
+        guard let other = NSRunningApplication.runningApplications(withBundleIdentifier: id)
+            .first(where: { $0.processIdentifier != me && !$0.isTerminated }) else { return }
+        log("another instance is running (pid \(other.processIdentifier), \(other.bundleURL?.path ?? "?")) — exiting")
+        other.activate()
+        exit(0)
     }
 }
 
