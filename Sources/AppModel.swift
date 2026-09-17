@@ -234,6 +234,9 @@ final class AppModel: ObservableObject {
         // session or not — arm it for the app's lifetime (after wire(), so its
         // events reach onFileTransfer).
         controller.startShareReceiver()
+        // Files dragged onto the menu-bar icon (the status item exists only once
+        // the scene is up, so this waits for it).
+        StatusItemDrop.shared.install(model: self)
         // 云传输 (cloud transfer): files the phone uploaded to vivo's relay. No
         // socket of its own — it polls, and does nothing at all unless the user
         // is in account mode and signed in, so arming it here is unconditional.
@@ -996,6 +999,45 @@ final class AppModel: ObservableObject {
         controller.pushFiles(urls, phoneDir: phoneDir)
     }
 
+    /// Files dropped on a phone that wasn't connected: sent as soon as a session to
+    /// that very phone is up, dropped if the connect fails or reaches another one.
+    private var pendingSend: (deviceId: String, name: String, urls: [URL])?
+
+    /// Send files to a remembered phone, connecting to it first if needed (the
+    /// drop panel on the menu-bar icon). A session to another phone is replaced.
+    func sendFiles(_ urls: [URL], to device: KnownDevice) {
+        guard !urls.isEmpty else { return }
+        if isConnected && activeDeviceId == device.id {
+            pushFiles(urls)
+            return
+        }
+        pendingSend = (device.id, device.menuLabel, urls)
+        noteFileTransfer(String(format: L("Connecting to %@ to send %lld file(s)…"), device.menuLabel, urls.count),
+                         sticky: true)
+        connectAuto(device)
+    }
+
+    /// Called when the live session's phone is known: send what was waiting for it.
+    /// `confirmed` = the id came from `/base-info` rather than a name match, so a
+    /// mismatch really is another phone (a cable can reach a different one).
+    private func sendPendingIfConnected(confirmed: Bool) {
+        guard let p = pendingSend, isConnected, let id = activeDeviceId else { return }
+        if id == p.deviceId {
+            pendingSend = nil
+            pushFiles(p.urls)
+        } else if confirmed {
+            abandonPendingSend(String(format: L("Connected to a different phone — files not sent to %@."), p.name))
+        }
+    }
+
+    private func abandonPendingSend(_ why: String) {
+        guard pendingSend != nil else { return }
+        pendingSend = nil
+        log("pending send dropped: \(why)")
+        noteFileTransfer(why)
+        Notifier.postFileSendFailed(why)
+    }
+
     /// Bumped each time a push finishes (either way), so the file browser can
     /// refresh the folder it uploaded into.
     @Published private(set) var pushGeneration = 0
@@ -1376,6 +1418,7 @@ final class AppModel: ObservableObject {
     private func rememberConnectedDevice(_ info: PhoneInfo) {
         guard !info.deviceId.isEmpty else { return }
         activeDeviceId = info.deviceId
+        sendPendingIfConnected(confirmed: true)
         var dev = knownDevices.first { $0.id == info.deviceId }
             ?? KnownDevice(id: info.deviceId, name: info.name, lastIP: nil, lastTransport: nil)
         if !info.name.isEmpty { dev.name = info.name }
@@ -1628,6 +1671,7 @@ final class AppModel: ObservableObject {
                 // Highlight the matching roster entry right away; `/base-info` will
                 // confirm/correct the id shortly via rememberConnectedDevice.
                 self.activeDeviceId = self.knownDevices.first { $0.matches(d) }?.id
+                self.sendPendingIfConnected(confirmed: false)
                 if self.reconnectDevice != nil { log("auto-reconnect succeeded") }
                 self.cancelReconnect()
                 // Every way in ends here — a click in the menu, the auto-reconnect,
@@ -1644,7 +1688,13 @@ final class AppModel: ObservableObject {
                 self.deviceInfo = nil
                 self.activeDeviceId = nil
                 self.fileTransferNote = nil
+                if let p = self.pendingSend {
+                    self.abandonPendingSend(String(format: L("Couldn't connect to %@ — files not sent."), p.name))
+                }
             case .failed(let message):
+                if let p = self.pendingSend {
+                    self.abandonPendingSend(String(format: L("Couldn't connect to %@ — files not sent."), p.name))
+                }
                 // A reconnect attempt failed: back off and retry, or give up.
                 self.noteReconnectFailure(message)
             default:

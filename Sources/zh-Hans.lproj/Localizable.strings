@@ -271,4 +271,15 @@
 "%lld of %lld items could not be deleted." = "有 %lld 项未能删除（共 %lld 项）。";
 "Nothing to send" = "没有可发送的内容";
 "Streaming" = "串流";
+
+/* Drop files on the menu-bar icon */
+"Drop files on a phone" = "拖到手机上发送";
+"Send %lld item(s) to…" = "发送 %lld 项到…";
+"Other phones" = "其他手机";
+"Connects first" = "会先连接";
+"No phones yet — connect one from the menu first." = "还没有手机，请先从菜单连接一台。";
+"Close" = "关闭";
+"Connecting to %@ to send %lld file(s)…" = "正在连接 %@，连上后发送 %lld 项…";
+"Couldn't connect to %@ — files not sent." = "无法连接 %@，文件未发送。";
+"Connected to a different phone — files not sent to %@." = "连上的是另一台手机，文件没有发给 %@。";
 "Files" = "文件";

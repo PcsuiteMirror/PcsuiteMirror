@@ -245,4 +245,15 @@
 "%lld of %lld items could not be deleted." = "%lld of %lld items could not be deleted.";
 "Nothing to send" = "Nothing to send";
 "Streaming" = "Streaming";
+
+/* Drop files on the menu-bar icon */
+"Drop files on a phone" = "Drop files on a phone";
+"Send %lld item(s) to…" = "Send %lld item(s) to…";
+"Other phones" = "Other phones";
+"Connects first" = "Connects first";
+"No phones yet — connect one from the menu first." = "No phones yet — connect one from the menu first.";
+"Close" = "Close";
+"Connecting to %@ to send %lld file(s)…" = "Connecting to %@ to send %lld file(s)…";
+"Couldn't connect to %@ — files not sent." = "Couldn't connect to %@ — files not sent.";
+"Connected to a different phone — files not sent to %@." = "Connected to a different phone — files not sent to %@.";
 "Files" = "Files";
