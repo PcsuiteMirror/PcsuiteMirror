@@ -23,6 +23,13 @@ struct PcsuiteMirrorApp: App {
         } label: {
             Image(systemName: model.menuBarSymbol)
         }
+
+        // A SwiftUI scene rather than a hand-built NSWindow: only a scene gets the
+        // native unified toolbar, search field and sidebar material.
+        Window(L("Phone Files"), id: FileBrowserView.windowID) {
+            FileBrowserView(app: model)
+        }
+        .defaultSize(width: 960, height: 620)
     }
 }
 

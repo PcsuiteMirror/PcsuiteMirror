@@ -990,11 +990,18 @@ final class AppModel: ObservableObject {
 
     /// Send local files to the phone (dropped onto the mirror window or picked
     /// from the menu). No-op when disconnected.
-    func pushFiles(_ urls: [URL]) {
+    func pushFiles(_ urls: [URL], phoneDir: String = "") {
         guard isConnected else { return }
         noteFileTransfer(String(format: L("Sending %lld file(s)…"), urls.count), sticky: true)
-        controller.pushFiles(urls)
+        controller.pushFiles(urls, phoneDir: phoneDir)
     }
+
+    /// Bumped each time a push finishes (either way), so the file browser can
+    /// refresh the folder it uploaded into.
+    @Published private(set) var pushGeneration = 0
+
+    /// The live session for the file browser; nil when disconnected.
+    func fileSession() -> PcSession? { isConnected ? controller.currentSession() : nil }
 
     /// Show a file-transfer status line; auto-clears after a few seconds unless
     /// `sticky` (a terminal event replaces a sticky note and re-arms the timer).
@@ -1704,6 +1711,7 @@ final class AppModel: ObservableObject {
         }
         controller.onPushResult = { [weak self] count, dir, error in
             guard let self else { return }
+            self.pushGeneration += 1
             if let dir {
                 self.noteFileTransfer(String(format: L("Sent → %@"), dir))
                 if self.notifyOnFileTransfer { Notifier.postFilesSent(count: count, dir: dir) }

@@ -5,6 +5,7 @@ import AppKit
 /// (Button / Toggle / Menu / Divider / Text) — SwiftUI renders them into an NSMenu.
 struct MenuContent: View {
     @ObservedObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         // The status line. A failure is a row that copies its full text: the
@@ -137,6 +138,10 @@ struct MenuContent: View {
             Button(model.audioOnly ? L("Stop playing phone audio") : L("Play phone audio only (no picture)")) {
                 if model.audioOnly { model.stopAudioOnly() } else { model.startAudioOnly() }
             }
+        }
+        Button(L("Browse Phone Files…")) {
+            openWindow(id: FileBrowserView.windowID)
+            NSApp.activate(ignoringOtherApps: true)
         }
         Button(L("Send Files to Phone…")) { model.pushFiles(pickFilesToSend()) }
         // Where the sound comes out. Switchable live — the picture keeps running.

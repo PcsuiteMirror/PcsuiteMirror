@@ -785,26 +785,28 @@ final class SessionController {
     /// and must not park the serial `queue` (same pattern as fetchDeviceInfo).
     /// Regular files only; directories are dropped here because the core rejects
     /// them (v1). Result reported via `onPushResult` on the main queue.
-    func pushFiles(_ urls: [URL]) {
+    /// `phoneDir` is the phone-side target directory; "" = the phone's default.
+    func pushFiles(_ urls: [URL], phoneDir: String = "") {
         guard let s = snapshotSession() else {
             log("pushFiles: not connected")
             emit { self.onPushResult?(0, nil, "not connected") }
             return
         }
+        // Folders go up whole; the core walks them.
         let files = urls.filter {
-            (try? $0.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+            let v = try? $0.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
+            return v?.isRegularFile == true || v?.isDirectory == true
         }
         guard !files.isEmpty else {
-            log("pushFiles: no regular files in the drop (folders unsupported)")
-            emit { self.onPushResult?(0, nil, L("Folders aren't supported yet — drop regular files")) }
+            log("pushFiles: nothing uploadable in the drop")
+            emit { self.onPushResult?(0, nil, L("Nothing to send")) }
             return
         }
         Thread.detachNewThread { [weak self] in
             let vec = RustVec<RustString>()
             for f in files { vec.push(value: RustString(f.path)) }
             do {
-                // "" = the phone's default save directory.
-                let dir = try s.push_files(vec, RustString("")).toString()
+                let dir = try s.push_files(vec, RustString(phoneDir)).toString()
                 self?.emit { self?.onPushResult?(files.count, dir, nil) }
             } catch {
                 let msg = ffiMessage(error)
@@ -1031,6 +1033,11 @@ final class SessionController {
         session = s
         lock.lock(); sessionRef = s; lock.unlock()
     }
+    /// The live session for one-off calls that don't go through this controller
+    /// (the file browser). Take it per call and don't keep it: holding it would
+    /// keep a dead session's handle alive after a disconnect.
+    func currentSession() -> PcSession? { snapshotSession() }
+
     private func snapshotSession() -> PcSession? {
         lock.lock(); defer { lock.unlock() }; return sessionRef
     }
