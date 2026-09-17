@@ -270,3 +270,5 @@
 "%@ failed: %@" = "%@失败：%@";
 "%lld of %lld items could not be deleted." = "有 %lld 项未能删除（共 %lld 项）。";
 "Nothing to send" = "没有可发送的内容";
+"Streaming" = "串流";
+"Files" = "文件";

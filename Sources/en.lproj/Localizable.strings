@@ -244,3 +244,5 @@
 "%@ failed: %@" = "%@ failed: %@";
 "%lld of %lld items could not be deleted." = "%lld of %lld items could not be deleted.";
 "Nothing to send" = "Nothing to send";
+"Streaming" = "Streaming";
+"Files" = "Files";

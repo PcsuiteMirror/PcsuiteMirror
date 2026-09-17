@@ -124,38 +124,45 @@ struct MenuContent: View {
         return !phone.name.isEmpty && cur.name == phone.name
     }
 
-    /// What can be done with the live session: mirror, send files, audio, disconnect.
+    /// What can be done with the live session, grouped: streaming (picture and
+    /// sound), files, then disconnect. Section headers show on macOS 14+; on 13
+    /// the groups are just divided.
     @ViewBuilder private var sessionActions: some View {
-        if let info = model.deviceInfo {
-            Text("\(L("Storage")) \(info.storageSummary)")
-        }
-        Button(model.pictureShowing ? L("Stop mirroring") : L("Start mirroring")) {
-            if model.pictureShowing { model.closeMirror() } else { model.openMirror() }
-        }
-        // The sound without the picture (music, a call, the phone in a pocket).
-        // Opening the picture takes it over, so the row only exists without one.
-        if !model.pictureShowing {
-            Button(model.audioOnly ? L("Stop playing phone audio") : L("Play phone audio only (no picture)")) {
-                if model.audioOnly { model.stopAudioOnly() } else { model.startAudioOnly() }
+        Section(L("Streaming")) {
+            Button(model.pictureShowing ? L("Stop mirroring") : L("Start mirroring")) {
+                if model.pictureShowing { model.closeMirror() } else { model.openMirror() }
+            }
+            // The sound without the picture (music, a call, the phone in a pocket).
+            // Opening the picture takes it over, so the row only exists without one.
+            if !model.pictureShowing {
+                Button(model.audioOnly ? L("Stop playing phone audio") : L("Play phone audio only (no picture)")) {
+                    if model.audioOnly { model.stopAudioOnly() } else { model.startAudioOnly() }
+                }
+            }
+            // Where the sound comes out. Switchable live — the picture keeps running.
+            // Not offered on an audio-only stream: the audio being here is its point.
+            if !model.audioOnly {
+                Button(model.audioEnabled ? L("Move audio back to phone") : L("Move audio to this Mac")) {
+                    model.setAudio(!model.audioEnabled)
+                }
+            }
+            if model.audioEnabled {
+                Button(model.audioMuted ? L("Unmute this Mac") : L("Mute this Mac")) {
+                    model.toggleAudioMuted()
+                }
             }
         }
-        Button(L("Browse Phone Files…")) {
-            openWindow(id: FileBrowserView.windowID)
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        Button(L("Send Files to Phone…")) { model.pushFiles(pickFilesToSend()) }
-        // Where the sound comes out. Switchable live — the picture keeps running.
-        // Not offered on an audio-only stream: the audio being here is its point.
-        if !model.audioOnly {
-            Button(model.audioEnabled ? L("Move audio back to phone") : L("Move audio to this Mac")) {
-                model.setAudio(!model.audioEnabled)
+        Section(L("Files")) {
+            if let info = model.deviceInfo {
+                Text("\(L("Storage")) \(info.storageSummary)")
             }
-        }
-        if model.audioEnabled {
-            Button(model.audioMuted ? L("Unmute this Mac") : L("Mute this Mac")) {
-                model.toggleAudioMuted()
+            Button(L("Browse Phone Files…")) {
+                openWindow(id: FileBrowserView.windowID)
+                NSApp.activate(ignoringOtherApps: true)
             }
+            Button(L("Send Files to Phone…")) { model.pushFiles(pickFilesToSend()) }
         }
+        Divider()
         Button(L("Disconnect")) { model.disconnect() }
     }
 
