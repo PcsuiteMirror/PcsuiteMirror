@@ -1732,7 +1732,7 @@ final class AppModel: ObservableObject {
                     ? String(format: L("Cloud transfer: received %lld file(s) → %@"), files.count, dir)
                     : String(format: L("Received %lld file(s) → %@"), files.count, dir)
                 self.noteFileTransfer(text)
-                if self.notifyOnFileTransfer { Notifier.postFilesReceived(count: files.count, dir: dir) }
+                if self.notifyOnFileTransfer { Notifier.postFilesReceived(files: files, dir: dir) }
             case "failed":
                 let text = fromCloud
                     ? String(format: L("Cloud transfer failed: %@"), error)

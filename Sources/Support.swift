@@ -194,11 +194,13 @@ enum Notifier {
     }
 
     /// One fire-and-forget banner: no trigger, throwaway id, default sound.
-    private static func post(title: String, subtitle: String = "", body: String) {
+    private static func post(title: String, subtitle: String = "", body: String,
+                             userInfo: [String: Any] = [:]) {
         let content = UNMutableNotificationContent()
         content.title = title
         if !subtitle.isEmpty { content.subtitle = subtitle }
         content.body = body
+        content.userInfo = userInfo
         content.sound = .default
         let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req) { error in
@@ -239,8 +241,33 @@ enum Notifier {
     }
 
     /// Announce a phone→PC batch (快传 / 互传 / 云传输) that landed on disk.
-    static func postFilesReceived(count: Int, dir: String) {
-        post(title: L("Files received"), body: String(format: L("%lld file(s) saved to %@"), count, dir))
+    /// Carries the saved names and folder so a click can show them in Finder
+    /// (see `revealReceivedFiles`).
+    static func postFilesReceived(files: [String], dir: String) {
+        post(title: L("Files received"),
+             body: String(format: L("%lld file(s) saved to %@"), files.count, dir),
+             userInfo: [receivedFilesKey: files, receivedDirKey: dir])
+    }
+
+    private static let receivedFilesKey = "receivedFiles"
+    private static let receivedDirKey = "receivedDir"
+
+    /// A click on a "Files received" banner: open the save folder in Finder with
+    /// that batch selected. Files moved or deleted since are skipped; if none are
+    /// left, the folder itself is opened. Returns false for any other banner.
+    static func revealReceivedFiles(_ userInfo: [AnyHashable: Any]) -> Bool {
+        guard let dir = userInfo[receivedDirKey] as? String else { return false }
+        let files = userInfo[receivedFilesKey] as? [String] ?? []
+        let folder = URL(fileURLWithPath: dir, isDirectory: true)
+        let existing = files
+            .map { folder.appendingPathComponent($0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        if existing.isEmpty {
+            NSWorkspace.shared.open(folder)
+        } else {
+            NSWorkspace.shared.activateFileViewerSelecting(existing)
+        }
+        return true
     }
 
     /// A phone→PC batch could not be pulled/written.
