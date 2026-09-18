@@ -8,5 +8,57 @@
     <description>Updates for PcsuiteMirror.</description>
     <language>en</language>
     <!-- BEGIN-ITEMS (release.sh inserts new entries here, newest first) -->
+    <item>
+      <title>v0.1.6</title>
+      <pubDate>Fri, 18 Sep 2026 06:26:56 +0000</pubDate>
+      <sparkle:version>14</sparkle:version>
+      <sparkle:shortVersionString>0.1.6</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<h3>PcsuiteMirror 0.1.6</h3>
+<p>PcsuiteMirror now updates itself.</p>
+<h4>New</h4>
+<ul>
+<li><strong>Automatic updates</strong> — the app checks for new versions once a day. When one</li>
+</ul>
+<p>  is found it doesn't interrupt you: an <em>Update available</em> item appears in the</p>
+<p>  menu, and clicking it shows the release notes and installs the update. Every</p>
+<p>  update is signature-checked before it installs.</p>
+<p>  - <em>Check for Updates…</em> in the menu checks right away.</p>
+<p>  - Settings → General → Updates turns automatic checks on or off and shows the</p>
+<p>    current version.</p>
+<p>  - This is the last version you need to install by hand; later ones arrive</p>
+<p>    through the app.</p>
+<h4>Changed</h4>
+<ul>
+<li><strong>Clipboard diagnostics</strong> — when the phone sends clipboard data the app can't</li>
+</ul>
+<p>  read, the log now records what arrived, to help track down cases where the</p>
+<p>  Mac's clipboard stops reaching the phone until something is copied on the</p>
+<p>  phone.</p>
+<h4>Requirements</h4>
+<ul>
+<li>macOS 13 (Ventura) or later; collapsible sidebar groups and menu group titles</li>
+</ul>
+<p>  need macOS 14</p>
+<ul>
+<li><strong>Apple Silicon (arm64)</strong> — this build is arm64-only</li>
+<li>USB: just plug in and authorize USB debugging. Wi-Fi: set your vivo-account</li>
+</ul>
+<p>  <code>openID</code> once in the menu-bar identity settings (see the README).</p>
+<h4>Install</h4>
+<p>Signed with a Developer ID certificate and <strong>notarized by Apple</strong>, so it opens</p>
+<p>normally — no Gatekeeper right-click dance:</p>
+<p>1. Quit any running PcsuiteMirror, open the <code>.dmg</code> and drag</p>
+<p>   <strong>PcsuiteMirror.app</strong> to <strong>Applications</strong> (replace the old copy).</p>
+<p>2. Launch it from Applications. (It's a menu-bar app — look for its icon in the</p>
+<p>   menu bar, not the Dock.)</p>
+<p>The <code>.zip</code> is the same notarized app if you prefer that over the disk image.</p>
+<h4>License</h4>
+<p>GPLv3 — Copyright (C) 2026 xVanTuring.</p>
+<p><a href="https://github.com/PcsuiteMirror/PcsuiteMirror/releases/tag/v0.1.6">View full release on GitHub →</a></p>
+      ]]></description>
+      <enclosure url="https://github.com/PcsuiteMirror/PcsuiteMirror/releases/download/v0.1.6/PcsuiteMirror-0.1.6.zip" length="5467153" type="application/octet-stream" sparkle:edSignature="7RHHxtmEiPw2dz7V+7zadEXUkXauMyyOFn0EB7K0lLRRn3VXNKNjmaojUpNJccAZN8HgcXCJEtPHvjomCb/mAw==" />
+    </item>
   </channel>
 </rss>
