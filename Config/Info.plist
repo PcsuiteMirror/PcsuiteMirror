@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Sparkle 2. Merged into the generated Info.plist (INFOPLIST_FILE +
+	  GENERATE_INFOPLIST_FILE). The feed lives on main; scripts/release.sh
+	  commits + pushes a new appcast item after each GitHub release exists.
+	-->
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/PcsuiteMirror/PcsuiteMirror/main/appcast.xml</string>
+	<!--
+	  EdDSA public key, shared with the author's other apps (Perch, ZedisUI).
+	  The private half is in the release Mac's login keychain. Never change it
+	  once shipped: installed copies would reject every later update.
+	-->
+	<key>SUPublicEDKey</key>
+	<string>g3SCjADYsXhMN5/4hnQZ7eOawvtVoGJJsS5CFew15WQ=</string>
+	<!-- First-install default (daily); Sparkle persists later changes itself. -->
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+</dict>
+</plist>

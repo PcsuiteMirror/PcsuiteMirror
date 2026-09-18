@@ -3,13 +3,19 @@
 #
 # Bump version → build Rust core → build Release .app → Developer-ID sign
 # (hardened runtime) → notarize + staple → zip + DMG → tag → publish a
-# GitHub release.
+# GitHub release → Sparkle-sign the zip and push a new appcast.xml item.
 #
 # The app is signed with a Developer ID Application certificate (team
 # $TEAM_ID), hardened-runtime enabled, then submitted to Apple's notary
 # service and the ticket stapled onto both the .app and the .dmg. Result:
 # Gatekeeper opens it with no right-click dance and no quarantine prompt,
-# even offline. (Sparkle auto-update is still intentionally absent.)
+# even offline.
+#
+# Sparkle: installed copies poll appcast.xml on main (SUFeedURL in
+# Config/Info.plist). The appcast commit is pushed only AFTER the GitHub
+# release exists, so the feed never points at a download that isn't live.
+# The EdDSA private key (shared with Perch / ZedisUI) must be in the login
+# keychain; `sign_update` reads it from there.
 #
 # One-time machine setup (already done for Noticky on this Mac):
 #   • Developer ID Application cert for team $TEAM_ID in the login keychain
@@ -43,6 +49,11 @@ PRODUCT="PcsuiteMirror"
 RUST_DIR="../pcsuite-rs"
 RUST_BUILD="${RUST_DIR}/crates/pcsuite-ffi/build-macos.sh"
 BUILD_DIR="build/DD"            # xcodebuild derivedData (gitignored)
+GH_REPO="PcsuiteMirror/PcsuiteMirror"   # must match SUFeedURL in Config/Info.plist
+APPCAST="appcast.xml"
+SU_PLIST="Config/Info.plist"    # partial Info.plist carrying SUFeedURL / SUPublicEDKey
+# sign_update / generate_keys ship in the Sparkle SPM artifact bundle.
+SPARKLE_BIN_DIR="${BUILD_DIR}/SourcePackages/artifacts/sparkle/Sparkle/bin"
 
 # Developer ID / notarization. TEAM_ID + NOTARY_PROFILE are shared with the
 # author's other notarized apps; override NOTARY_PROFILE via env if you stored
@@ -156,6 +167,34 @@ if [[ -n "$NOTES_FILE" ]]; then
     [[ -f "$NOTES_FILE" ]] || { echo "ERROR: --notes-file not found: $NOTES_FILE" >&2; exit 1; }
 fi
 
+# ── Sparkle pre-flight ──────────────────────────────────────────────
+[[ -f "$APPCAST" ]] || { echo "ERROR: $APPCAST missing — Sparkle needs it. Restore from git." >&2; exit 1; }
+grep -q "BEGIN-ITEMS" "$APPCAST" \
+    || { echo "ERROR: $APPCAST has no BEGIN-ITEMS marker; refuse to mangle it." >&2; exit 1; }
+# An empty key would make Sparkle accept unsigned updates — refuse.
+ED_PUBKEY="$(plutil -extract SUPublicEDKey raw -o - "$SU_PLIST" 2>/dev/null || true)"
+[[ -n "$ED_PUBKEY" ]] || { echo "ERROR: SUPublicEDKey missing from $SU_PLIST" >&2; exit 1; }
+
+# The project is gitignored and project.yml may have changed; regenerate, then
+# resolve SPM so the Sparkle tools exist before anything gets bumped.
+xcodegen >/dev/null
+echo "==> Resolving SPM packages (Sparkle tools)"
+xcodebuild -project "$PROJECT" -scheme "$SCHEME" -derivedDataPath "$BUILD_DIR" \
+    -resolvePackageDependencies >/dev/null
+[[ -x "${SPARKLE_BIN_DIR}/sign_update" ]] \
+    || { echo "ERROR: Sparkle sign_update not at ${SPARKLE_BIN_DIR}/sign_update (SPM resolve failed?)" >&2; exit 1; }
+if [[ "$DRY_RUN" == "false" ]]; then
+    # `generate_keys -p` prints the public half of the keychain's private key.
+    KEYCHAIN_PUBKEY="$("${SPARKLE_BIN_DIR}/generate_keys" -p 2>/dev/null || true)"
+    if [[ "$KEYCHAIN_PUBKEY" != "$ED_PUBKEY" ]]; then
+        echo "ERROR: Sparkle EdDSA private key in the login keychain doesn't match SUPublicEDKey." >&2
+        echo "       keychain: '${KEYCHAIN_PUBKEY}'  plist: '${ED_PUBKEY}'" >&2
+        echo "       Restore the shared key (same one Perch/ZedisUI use): generate_keys -f <key.pem>." >&2
+        echo "       Do NOT generate a new one." >&2
+        exit 1
+    fi
+fi
+
 # ── Build the Rust static lib + Swift glue ──────────────────────────
 echo "==> Building Rust core ($RUST_BUILD)"
 "$RUST_BUILD"
@@ -211,7 +250,23 @@ rm -rf "${DIST_DIR}/${PRODUCT}.swiftmodule" "${DIST_DIR}/${PRODUCT}.app.dSYM"
 # --options runtime → hardened runtime (required for notarization).
 # --timestamp       → secure Apple timestamp (also required).
 # No --entitlements: the app needs no hardened-runtime exceptions (Rust is
-# statically linked; only Apple system frameworks are dynamically loaded).
+# statically linked; Sparkle is our only embedded framework).
+#
+# Sparkle.framework's helpers are signed inside-out first, per Sparkle's
+# "signing without Xcode" recipe: library validation under hardened runtime
+# only loads a framework signed by our own team, and notarization wants every
+# nested executable Developer-ID signed with a timestamp. Downloader.xpc keeps
+# its own entitlements.
+SPARKLE_FW="$APP/Contents/Frameworks/Sparkle.framework"
+[[ -d "$SPARKLE_FW" ]] || { echo "ERROR: Sparkle.framework not embedded in $APP" >&2; revert_bump; exit 1; }
+echo "==> Developer-ID signing Sparkle.framework"
+SIGN=(codesign --force --options runtime --timestamp --sign "$DEV_ID_HASH")
+"${SIGN[@]}" "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc"
+"${SIGN[@]}" --preserve-metadata=entitlements "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc"
+"${SIGN[@]}" "$SPARKLE_FW/Versions/B/Autoupdate"
+"${SIGN[@]}" "$SPARKLE_FW/Versions/B/Updater.app"
+"${SIGN[@]}" "$SPARKLE_FW"
+
 echo "==> Developer-ID signing ${PRODUCT}.app"
 codesign --force --options runtime --timestamp --sign "$DEV_ID_HASH" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP" \
@@ -319,11 +374,50 @@ else
         "$ZIP" "$DMG"
 fi
 
-REPO_SLUG="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo '<owner>/<repo>')"
+# ── Sparkle: sign the .zip + publish the appcast item ───────────────
+# Done only now: the zip is live at DOWNLOAD_URL, so installs that fetch the
+# feed right after the push can download it. sign_update prints
+# `sparkle:edSignature="…" length="…"`.
+echo "==> Signing ${ZIP_ASSET} with the Sparkle EdDSA key"
+SIGN_LINE="$("${SPARKLE_BIN_DIR}/sign_update" "$ZIP")"
+ED_SIG="$(echo "$SIGN_LINE" | sed -E 's/.*sparkle:edSignature="([^"]+)".*/\1/')"
+ASSET_LEN="$(echo "$SIGN_LINE" | sed -E 's/.*length="([^"]+)".*/\1/')"
+if [[ -z "$ED_SIG" || -z "$ASSET_LEN" || "$ED_SIG" == "$SIGN_LINE" ]]; then
+    echo "ERROR: failed to parse sign_update output: $SIGN_LINE" >&2
+    echo "       The GitHub release exists; fix and add the appcast item by hand." >&2
+    exit 1
+fi
+
+DOWNLOAD_URL="https://github.com/${GH_REPO}/releases/download/${TAG}/${ZIP_ASSET}"
+RELEASE_LINK="https://github.com/${GH_REPO}/releases/tag/${TAG}"
+
+# Inline notes for Sparkle's update window: the --notes-file, else commit
+# subjects since the previous tag (minus release chores).
+NOTES_MD_FILE="$(mktemp)"
+if [[ -n "$NOTES_FILE" ]]; then
+    cat "$NOTES_FILE" > "$NOTES_MD_FILE"
+else
+    PREV_TAG="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+    git log ${PREV_TAG:+"${PREV_TAG}..${TAG}"} --no-merges --pretty='- %s' \
+        | grep -vE '^- (release|appcast)' > "$NOTES_MD_FILE" || true
+fi
+[[ -s "$NOTES_MD_FILE" ]] || printf -- '- %s\n' "$TITLE" > "$NOTES_MD_FILE"
+
+echo "==> Updating ${APPCAST}"
+python3 scripts/insert_appcast_item.py "$APPCAST" "$TAG" "$VERSION" "$next_build" \
+    "$ED_SIG" "$ASSET_LEN" "$DOWNLOAD_URL" "$RELEASE_LINK" "" "$NOTES_MD_FILE"
+rm -f "$NOTES_MD_FILE"
+xmllint --noout "$APPCAST" || { echo "ERROR: $APPCAST is no longer valid XML — not pushing." >&2; exit 1; }
+
+git add "$APPCAST"
+git commit -m "appcast: ${TAG}"
+git push origin HEAD
+
 echo
 echo "================================================================"
 echo "Release ${TAG} done — Developer-ID signed + notarized + stapled"
 echo "  .zip : ${ZIP}"
 echo "  .dmg : ${DMG}"
-echo "  URL  : https://github.com/${REPO_SLUG}/releases/tag/${TAG}"
+echo "  URL  : ${RELEASE_LINK}"
+echo "  feed : https://raw.githubusercontent.com/${GH_REPO}/main/${APPCAST}"
 echo "================================================================"

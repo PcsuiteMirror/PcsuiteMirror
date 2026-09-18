@@ -283,3 +283,11 @@
 "Couldn't connect to %@ — files not sent." = "无法连接 %@，文件未发送。";
 "Connected to a different phone — files not sent to %@." = "连上的是另一台手机，文件没有发给 %@。";
 "Files" = "文件";
+
+/* Updates (Sparkle) */
+"Update available: %@…" = "有可用更新：%@…";
+"Check for Updates…" = "检查更新…";
+"Automatically check for updates" = "自动检查更新";
+"Current version" = "当前版本";
+"Updates" = "更新";
+"Updates are signed and verified before they install. A background check that finds one shows it in the menu instead of interrupting you." = "更新在安装前会校验签名。后台检查发现新版本时，只在菜单里显示入口，不会弹窗打断你。";

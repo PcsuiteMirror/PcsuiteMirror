@@ -155,6 +155,7 @@ enum PreferencesTab: Int, CaseIterable {
 /// persists immediately and the menu stays in sync — there is no Save step.
 struct GeneralTab: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var updater = UpdaterService.shared
 
     var body: some View {
         Form {
@@ -180,6 +181,19 @@ struct GeneralTab: View {
                 Toggle(L("Verify-code relay"), isOn: $model.verifyEnabled)
             } header: {
                 Text(L("Sync"))
+            }
+
+            Section {
+                Toggle(L("Automatically check for updates"),
+                       isOn: Binding(get: { updater.autoCheck }, set: { updater.setAutoCheck($0) }))
+                LabeledContent(L("Current version"),
+                               value: "\(updater.currentVersion) (\(updater.currentBuild))")
+                Button(L("Check for Updates…")) { updater.checkForUpdates() }
+                    .disabled(!updater.canCheck)
+            } header: {
+                Text(L("Updates"))
+            } footer: {
+                Text(L("Updates are signed and verified before they install. A background check that finds one shows it in the menu instead of interrupting you."))
             }
 
             Section {

@@ -5,6 +5,7 @@ import AppKit
 /// (Button / Toggle / Menu / Divider / Text) — SwiftUI renders them into an NSMenu.
 struct MenuContent: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var updater = UpdaterService.shared
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -30,6 +31,13 @@ struct MenuContent: View {
         connectionItems
 
         Divider()
+        // A background check that finds an update only lands here (see
+        // UpdaterService); clicking brings up Sparkle's install window.
+        if let version = updater.availableVersion {
+            Button(String(format: L("Update available: %@…"), version)) { updater.checkForUpdates() }
+        }
+        Button(L("Check for Updates…")) { updater.checkForUpdates() }
+            .disabled(!updater.canCheck)
         Button(L("Settings…")) { PreferencesWindowController.shared.show(model: model) }
             .keyboardShortcut(",")
 

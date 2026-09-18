@@ -257,3 +257,11 @@
 "Couldn't connect to %@ — files not sent." = "Couldn't connect to %@ — files not sent.";
 "Connected to a different phone — files not sent to %@." = "Connected to a different phone — files not sent to %@.";
 "Files" = "Files";
+
+/* Updates (Sparkle) */
+"Update available: %@…" = "Update available: %@…";
+"Check for Updates…" = "Check for Updates…";
+"Automatically check for updates" = "Automatically check for updates";
+"Current version" = "Current version";
+"Updates" = "Updates";
+"Updates are signed and verified before they install. A background check that finds one shows it in the menu instead of interrupting you." = "Updates are signed and verified before they install. A background check that finds one shows it in the menu instead of interrupting you.";

@@ -74,6 +74,17 @@ echo "==> Signing (team $TEAM_ID, no hardened runtime)"
 for dylib in "$APP"/Contents/MacOS/*.dylib; do
     [[ -f "$dylib" ]] && codesign --force --sign "$DEV_ID_HASH" "$dylib"
 done
+# Sparkle.framework: the embed step strips its headers without re-signing
+# (signing is off in the project), so its original seal is broken. Re-sign
+# inside-out, as release.sh does (minus hardened runtime).
+SPARKLE_FW="$APP/Contents/Frameworks/Sparkle.framework"
+if [[ -d "$SPARKLE_FW" ]]; then
+    codesign --force --sign "$DEV_ID_HASH" "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc"
+    codesign --force --sign "$DEV_ID_HASH" --preserve-metadata=entitlements "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc"
+    codesign --force --sign "$DEV_ID_HASH" "$SPARKLE_FW/Versions/B/Autoupdate"
+    codesign --force --sign "$DEV_ID_HASH" "$SPARKLE_FW/Versions/B/Updater.app"
+    codesign --force --sign "$DEV_ID_HASH" "$SPARKLE_FW"
+fi
 codesign --force --sign "$DEV_ID_HASH" "$APP"
 codesign --verify --deep --strict "$APP"
 codesign -d --verbose=2 "$APP" 2>&1 | grep -E "^(Identifier|TeamIdentifier)=" | sed 's/^/    /'

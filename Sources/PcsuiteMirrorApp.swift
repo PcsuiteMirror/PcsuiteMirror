@@ -103,6 +103,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         do { try pcsuite_presence_start() } catch { log("presence: \(ffiMessage(error))") }
         // Menu-bar-only app: no Dock icon, no main window at launch.
         NSApp.setActivationPolicy(.accessory)
+        // Starts Sparkle's scheduler; it lives for the rest of the process.
+        _ = UpdaterService.shared
         UNUserNotificationCenter.current().delegate = self
         Notifier.requestAuth()
     }

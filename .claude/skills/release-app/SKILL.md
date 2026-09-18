@@ -7,7 +7,17 @@ Releasing runs `scripts/release.sh`, which does the whole chain end to end:
 bump version → build Rust core → Release build → Developer-ID sign (hardened
 runtime) → notarize + staple the `.app` → zip + dmg → notarize + staple the
 `.dmg` → commit the version bump → push `main` → tag `vX.Y.Z` → create a GitHub
-release with both assets attached.
+release with both assets attached → Sparkle-sign the zip (`sign_update`) → insert
+an `<item>` into `appcast.xml` → commit `appcast: vX.Y.Z` → push `main`.
+
+Installed copies update through Sparkle 2, polling `appcast.xml` on `main`
+(`SUFeedURL` in `Config/Info.plist`). The EdDSA key is the one Perch/ZedisUI use;
+its private half must be in the login keychain (the script checks
+`generate_keys -p` against `SUPublicEDKey`). Never generate a new key. The
+release notes file also becomes the notes in Sparkle's update window.
+
+**`--dry-run` reverts `project.yml` with `git checkout`** — commit any
+`project.yml` edits first or they are lost.
 
 **This is outward-facing and hard to undo** (public GitHub release, pushed tag +
 commits). Confirm the version number with the user before running the real
@@ -84,7 +94,9 @@ LOG="$SCRATCHPAD/release-X.Y.Z.log"   # or any temp path
 Watch the log for these milestones (all must appear):
 `** BUILD SUCCEEDED **` → `Authority=Developer ID Application` → `.app` `status:
 Accepted` → `.dmg` `status: Accepted` → `Gatekeeper … accepted` →
-`Release vX.Y.Z done` + the release URL.
+`Release vX.Y.Z done` + the release URL. The `appcast: vX.Y.Z` commit comes right
+before that final line — if `sign_update` fails, the GitHub release already
+exists and the appcast item has to be added by hand.
 
 ## Step 6 — verify the publish landed
 
