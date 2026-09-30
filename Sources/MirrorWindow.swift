@@ -64,6 +64,7 @@ struct MirrorChromeView: View {
             WindowDragHandle()      // drag the window from any empty title-bar spot
             HStack {
                 TrafficLights(onClose: onClose, onMinimize: onMinimize, onZoom: onZoom)
+                    .fixedSize()   // an NSViewRepresentable otherwise stretches over the whole bar
                 Spacer()
                 // Mute this Mac. Only meaningful while the phone is routing its audio
                 // here — otherwise the sound is coming out of the phone and there is
@@ -488,39 +489,98 @@ final class MirrorContainerView: NSView {
 
 // MARK: - macOS window controls
 
-/// macOS-style window controls (close / minimize / zoom) for a borderless window.
-/// Glyphs appear while the cluster is hovered, like the system.
-struct TrafficLights: View {
+/// Window controls (close / minimize / zoom) for the borderless window. These are the
+/// system's own buttons (`NSWindow.standardWindowButton(_:for:)`), not drawn circles,
+/// so size, spacing, glyphs and the inactive grey follow each macOS redesign.
+struct TrafficLights: NSViewRepresentable {
     let onClose: () -> Void
     let onMinimize: () -> Void
     let onZoom: () -> Void
-    @State private var hovering = false
 
-    var body: some View {
-        HStack(spacing: 8) {
-            light(Color(red: 1.0, green: 0.37, blue: 0.34), "xmark", onClose)
-            light(Color(red: 0.99, green: 0.74, blue: 0.18), "minus", onMinimize)
-            light(Color(red: 0.16, green: 0.78, blue: 0.25), "plus", onZoom)
+    func makeNSView(context: Context) -> TrafficLightsView { TrafficLightsView() }
+    func updateNSView(_ v: TrafficLightsView, context: Context) {
+        v.actions = [onClose, onMinimize, onZoom]
+    }
+}
+
+final class TrafficLightsView: NSView {
+    private static let mask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
+    private static let kinds: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+
+    /// Gap between buttons as the running OS lays them out in a real title bar
+    /// (measured once from a throwaway titled window; 9pt on macOS 27).
+    private static let spacing: CGFloat = {
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100),
+                         styleMask: mask, backing: .buffered, defer: true)
+        guard let c = w.standardWindowButton(.closeButton),
+              let m = w.standardWindowButton(.miniaturizeButton) else { return 8 }
+        return max(0, m.frame.minX - c.frame.maxX)
+    }()
+
+    var actions: [() -> Void] = []
+    private let buttons: [NSButton]
+    private var mouseInside = false
+    private var tracking: NSTrackingArea?
+
+    init() {
+        buttons = Self.kinds.compactMap { NSWindow.standardWindowButton($0, for: Self.mask) }
+        super.init(frame: .zero)
+        for (i, b) in buttons.enumerated() {
+            b.tag = i
+            b.target = self   // standalone buttons default to window actions a borderless window ignores
+            b.action = #selector(press(_:))
+            addSubview(b)
         }
-        .onHover { hovering = $0 }
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentHuggingPriority(.required, for: .vertical)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    override var intrinsicContentSize: NSSize {
+        let w = buttons.reduce(0) { $0 + $1.frame.width } + Self.spacing * CGFloat(max(0, buttons.count - 1))
+        return NSSize(width: w, height: buttons.map(\.frame.height).max() ?? 0)
     }
 
-    private func light(_ color: Color, _ symbol: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            ZStack {
-                Circle()
-                    .fill(color)
-                    .overlay(Circle().strokeBorder(.black.opacity(0.12), lineWidth: 0.5))
-                if hovering {
-                    Image(systemName: symbol)
-                        .font(.system(size: 7, weight: .bold))
-                        .foregroundStyle(.black.opacity(0.55))
-                }
-            }
-            .frame(width: 12, height: 12)
+    /// Row of buttons, vertically centred in whatever height we're given.
+    override func layout() {
+        super.layout()
+        var x: CGFloat = 0
+        for b in buttons {
+            b.setFrameOrigin(NSPoint(x: x, y: ((bounds.height - b.frame.height) / 2).rounded()))
+            x += b.frame.width + Self.spacing
         }
-        .buttonStyle(.plain)
     }
+
+    /// Only the buttons take clicks; the gaps fall through to the title bar's drag handle.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let v = super.hitTest(point)
+        return v === self ? nil : v
+    }
+
+    @objc private func press(_ sender: NSButton) {
+        if actions.indices.contains(sender.tag) { actions[sender.tag]() }
+    }
+
+    /// The buttons ask their superview whether the pointer is over the group to decide
+    /// whether to draw their glyphs — the same (private) hook the system title bar answers.
+    @objc func _mouseInGroup(_ button: NSButton) -> Bool { mouseInside }
+
+    private func setMouseInside(_ inside: Bool) {
+        guard inside != mouseInside else { return }
+        mouseInside = inside
+        buttons.forEach { $0.needsDisplay = true }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = tracking { removeTrackingArea(t) }
+        let t = NSTrackingArea(rect: .zero, options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+                               owner: self, userInfo: nil)
+        addTrackingArea(t)
+        tracking = t
+    }
+    override func mouseEntered(with e: NSEvent) { setMouseInside(true) }
+    override func mouseExited(with e: NSEvent) { setMouseInside(false) }
 }
 
 /// One Android navigation key (back / home / recents) for the bottom bar.
@@ -1145,6 +1205,52 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
         f.origin.x = min(max(f.origin.x, visible.minX), max(visible.maxX - f.width, visible.minX))
         f.origin.y = min(max(f.origin.y, visible.minY), max(visible.maxY - f.height, visible.minY))
         if f.origin != w.frame.origin { w.setFrameOrigin(f.origin) }
+    }
+
+    /// Which part of the frame the current live resize grabbed. Decided once when the
+    /// drag starts: re-deciding per event made a corner drag flip between following
+    /// the width and following the height, so the window size jumped (flicker).
+    private enum ResizeGrip { case horizontal, vertical, corner }
+    private var resizeGrip: ResizeGrip = .corner
+
+    func windowWillStartLiveResize(_ notification: Notification) {
+        guard let w = window else { return }
+        let p = NSEvent.mouseLocation, f = w.frame, edge: CGFloat = 12
+        let onSide = abs(p.x - f.minX) < edge || abs(p.x - f.maxX) < edge
+        let onEnd = abs(p.y - f.minY) < edge || abs(p.y - f.maxY) < edge
+        resizeGrip = onSide == onEnd ? .corner : (onSide ? .horizontal : .vertical)
+    }
+
+    /// Edge-drag resize: keep the phone's aspect ratio (the picture is sized from
+    /// `baseScreenH`, so a free-form size would crop it). An edge drag follows that
+    /// edge; a corner drag grows to whichever axis the pointer went further along.
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        let sz = model.videoSize
+        guard sz.width > 0, sz.height > 0 else { return frameSize }
+        let aspect = sz.width / sz.height
+        let chromeW = 2 * kInset, chromeH = kBar + kNav
+        let fromW = (frameSize.width - chromeW) / aspect, fromH = frameSize.height - chromeH
+        var screenH: CGFloat
+        switch resizeGrip {
+        case .horizontal: screenH = fromW
+        case .vertical: screenH = fromH
+        case .corner: screenH = max(fromW, fromH)
+        }
+        screenH = max(screenH, sender.minSize.height - chromeH, (sender.minSize.width - chromeW) / aspect)
+        if let visible = sender.screen?.visibleFrame {
+            screenH = min(screenH, visible.height - chromeH)
+        }
+        screenH = screenH.rounded()
+        return NSSize(width: (screenH * aspect).rounded() + chromeW, height: screenH + chromeH)
+    }
+
+    /// Adopt the dragged size as the new picture size (only for user resizes —
+    /// `applyAspect`/zoom set the size themselves).
+    func windowDidResize(_ notification: Notification) {
+        guard let w = window, w.inLiveResize else { return }
+        baseScreenH = max(1, w.contentLayoutRect.height - kBar - kNav)
+        unzoomedScreenH = nil   // a manual size replaces the zoomed one
+        applyAspect(model.videoSize)
     }
 
     /// Test hook (=2): jump to the hovered/grown state.
