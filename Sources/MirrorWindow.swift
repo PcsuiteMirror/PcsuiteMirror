@@ -998,6 +998,22 @@ extension MirrorInputView: NSTextInputClient {
 final class MirrorPanel: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    /// ⌘+ / ⌘- / ⌘0 → +1 / -1 / 0 (grow, shrink, default size).
+    var onScaleKey: ((Int) -> Void)?
+
+    override func performKeyEquivalent(with e: NSEvent) -> Bool {
+        let flags = e.modifierFlags.intersection([.command, .control, .option])
+        if flags == .command, let onScaleKey {
+            switch e.charactersIgnoringModifiers {
+            case "=", "+": onScaleKey(1); return true   // ⌘= is ⌘+ without Shift
+            case "-": onScaleKey(-1); return true
+            case "0": onScaleKey(0); return true
+            default: break
+            }
+        }
+        return super.performKeyEquivalent(with: e)
+    }
 }
 
 // MARK: - Window manager
@@ -1014,7 +1030,8 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
     private let statsOverlay = StatsOverlayModel()
     private let audioChrome = AudioChromeModel()
     private var bag = Set<AnyCancellable>()
-    private var baseScreenH: CGFloat = 640   // screen height in points; window = screen + chrome
+    private static let defaultScreenH: CGFloat = 640
+    private var baseScreenH: CGFloat = defaultScreenH   // screen height in points; window = screen + chrome
     /// While a privacy/lock overlay is up, the window chrome is force-revealed and
     /// held (the hover-to-reveal is unreliable under a full-picture overlay), so the
     /// user can always reach close / move while the (possibly long-lived) prompt is up.
@@ -1075,6 +1092,7 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
         }
         container.onDropFiles = { [weak self] urls in self?.model.pushFiles(urls) }
 
+        w.onScaleKey = { [weak self] step in self?.scale(step) }
         w.contentView = container
         w.isOpaque = false
         w.backgroundColor = .clear
@@ -1205,6 +1223,29 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
         f.origin.x = min(max(f.origin.x, visible.minX), max(visible.maxX - f.width, visible.minX))
         f.origin.y = min(max(f.origin.y, visible.minY), max(visible.maxY - f.height, visible.minY))
         if f.origin != w.frame.origin { w.setFrameOrigin(f.origin) }
+    }
+
+    /// ⌘+ / ⌘- step the picture height by 10%; ⌘0 (step 0) restores the default.
+    /// The window stays centred on where it was and is kept on screen.
+    func scale(_ step: Int) {
+        guard let w = window, model.videoSize.width > 0 else { return }
+        let visible = (w.screen ?? NSScreen.main)?.visibleFrame ?? .zero
+        let chromeH = kBar + kNav
+        let aspect = model.videoSize.width / model.videoSize.height
+        let minH = max(w.minSize.height - chromeH, (w.minSize.width - 2 * kInset) / aspect)
+        let maxH = max(minH, visible.height - chromeH)
+        let target = step == 0 ? Self.defaultScreenH : baseScreenH * (step > 0 ? 1.1 : 1 / 1.1)
+        let newH = min(max(target, minH), maxH).rounded()
+        guard newH != baseScreenH else { return }
+        let center = NSPoint(x: w.frame.midX, y: w.frame.midY)
+        baseScreenH = newH
+        unzoomedScreenH = nil
+        applyAspect(model.videoSize)
+        var f = w.frame
+        f.origin = NSPoint(x: center.x - f.width / 2, y: center.y - f.height / 2)
+        f.origin.x = min(max(f.origin.x, visible.minX), max(visible.maxX - f.width, visible.minX))
+        f.origin.y = min(max(f.origin.y, visible.minY), max(visible.maxY - f.height, visible.minY))
+        w.setFrameOrigin(f.origin)
     }
 
     /// Which part of the frame the current live resize grabbed. Decided once when the
