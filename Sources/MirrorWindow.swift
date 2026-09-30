@@ -565,10 +565,18 @@ final class TrafficLightsView: NSView {
     /// whether to draw their glyphs — the same (private) hook the system title bar answers.
     @objc func _mouseInGroup(_ button: NSButton) -> Bool { mouseInside }
 
+    /// The widget reads `_mouseInGroup:` only when it re-evaluates its hover state
+    /// (`mouseEnteredOrExited`, which the title bar calls) — not while drawing — so a
+    /// redraw alone leaves the glyphs hidden (macOS 27). Poke it the same way.
+    private static let hoverChanged = NSSelectorFromString("mouseEnteredOrExited")
+
     private func setMouseInside(_ inside: Bool) {
         guard inside != mouseInside else { return }
         mouseInside = inside
-        buttons.forEach { $0.needsDisplay = true }
+        for b in buttons {
+            if b.responds(to: Self.hoverChanged) { b.perform(Self.hoverChanged) }
+            b.needsDisplay = true
+        }
     }
 
     override func updateTrackingAreas() {
