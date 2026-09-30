@@ -9,6 +9,60 @@
     <language>en</language>
     <!-- BEGIN-ITEMS (release.sh inserts new entries here, newest first) -->
     <item>
+      <title>v0.1.7</title>
+      <pubDate>Wed, 30 Sep 2026 09:41:51 +0000</pubDate>
+      <sparkle:version>15</sparkle:version>
+      <sparkle:shortVersionString>0.1.7</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<h3>PcsuiteMirror 0.1.7</h3>
+<p>The mirror window now keeps up with the new macOS look, and can be resized.</p>
+<h4>New</h4>
+<ul>
+<li><strong>Zoom the mirror from the keyboard</strong> — ⌘+ makes the mirror window bigger,</li>
+</ul>
+<p>  ⌘- makes it smaller (10% per step), and ⌘0 returns it to the default size.</p>
+<p>  The window stays centred and on screen.</p>
+<h4>Fixed</h4>
+<ul>
+<li><strong>Window buttons match the system</strong> — the close / minimize / zoom buttons on</li>
+</ul>
+<p>  the mirror window are now the system's own, so they follow the current macOS</p>
+<p>  design (including macOS 27): size, spacing, the symbols shown on hover, and</p>
+<p>  the grey look when the window is in the background.</p>
+<ul>
+<li><strong>Resizing the window scales the picture</strong> — dragging an edge or corner of the</li>
+</ul>
+<p>  mirror window used to cut off the title bar instead of resizing the picture.</p>
+<p>  The picture now scales with the window and keeps the phone's aspect ratio;</p>
+<p>  dragging a corner no longer flickers.</p>
+<h4>Requirements</h4>
+<ul>
+<li>macOS 13 (Ventura) or later; collapsible sidebar groups and menu group titles</li>
+</ul>
+<p>  need macOS 14</p>
+<ul>
+<li><strong>Apple Silicon (arm64)</strong> — this build is arm64-only</li>
+<li>USB: just plug in and authorize USB debugging. Wi-Fi: set your vivo-account</li>
+</ul>
+<p>  <code>openID</code> once in the menu-bar identity settings (see the README).</p>
+<h4>Install</h4>
+<p>If you have 0.1.6 or later, the app offers this update itself — click</p>
+<p><em>Update available</em> in the menu (or <em>Check for Updates…</em>).</p>
+<p>Otherwise: the build is signed with a Developer ID certificate and **notarized by</p>
+<p>Apple**, so it opens normally:</p>
+<p>1. Quit any running PcsuiteMirror, open the <code>.dmg</code> and drag</p>
+<p>   <strong>PcsuiteMirror.app</strong> to <strong>Applications</strong> (replace the old copy).</p>
+<p>2. Launch it from Applications. (It's a menu-bar app — look for its icon in the</p>
+<p>   menu bar, not the Dock.)</p>
+<p>The <code>.zip</code> is the same notarized app if you prefer that over the disk image.</p>
+<h4>License</h4>
+<p>GPLv3 — Copyright (C) 2026 xVanTuring.</p>
+<p><a href="https://github.com/PcsuiteMirror/PcsuiteMirror/releases/tag/v0.1.7">View full release on GitHub →</a></p>
+      ]]></description>
+      <enclosure url="https://github.com/PcsuiteMirror/PcsuiteMirror/releases/download/v0.1.7/PcsuiteMirror-0.1.7.zip" length="5476390" type="application/octet-stream" sparkle:edSignature="zMpWm6hjAqBxrMFiwANWcSZe2HBCKoW+7ojgB+RHpdXxp/Y11p7wkd6OwUiWAqAuor5V8KynSV3BKd15Cn7iBQ==" />
+    </item>
+    <item>
       <title>v0.1.6</title>
       <pubDate>Fri, 18 Sep 2026 06:26:56 +0000</pubDate>
       <sparkle:version>14</sparkle:version>
