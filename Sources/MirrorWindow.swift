@@ -9,11 +9,17 @@ private let kInset: CGFloat = 6        // frame margin around the screen (sides)
 private let kNav: CGFloat = 38         // bottom navigation-key bar height
 private let kEdgeReveal: CGFloat = 84  // pointer distance from picture top/bottom that reveals the chrome
 
-/// Android `KeyEvent` codes for the on-screen navigation keys.
+/// Android `KeyEvent` codes for the on-screen navigation keys and the edit shortcuts.
 enum AndroidKey {
     static let back = 4        // KEYCODE_BACK
     static let home = 3        // KEYCODE_HOME
     static let appSwitch = 187 // KEYCODE_APP_SWITCH (recents)
+    static let a = 29          // KEYCODE_A
+    static let c = 31          // KEYCODE_C
+    static let v = 50          // KEYCODE_V
+    static let x = 52          // KEYCODE_X
+    /// `META_CTRL_ON` — the value the official PC client sends for Ctrl.
+    static let metaCtrl = 0x1000
 }
 
 // MARK: - Chrome bars (SwiftUI: just the buttons; bg + geometry are AppKit/CoreAnimation)
@@ -637,8 +643,10 @@ final class MirrorInputView: NSView {
     var onText: ((String) -> Void)?
     /// A special key as an Android `KEYCODE_*` value (Enter/Tab/arrows/Esc).
     var onKeyCode: ((Int) -> Void)?
-    /// Backspace (delete one char before the cursor).
-    var onBackspace: (() -> Void)?
+    /// An Android `KEYCODE_*` pressed with Ctrl held (⌘A / ⌘X / ⌘C).
+    var onCtrlKey: ((Int) -> Void)?
+    /// ⌘V: paste into the phone's focused field.
+    var onPaste: (() -> Void)?
     /// Phone caret position (mirror pixel space, top-left origin) for the IME;
     /// nil falls back to the pointer location.
     var imeAnchorVideo: CGPoint?
@@ -934,7 +942,9 @@ final class MirrorInputView: NSView {
         if !hasMarkedText() {
             // Special keys → Android KEYCODE_* (so they act like hardware keys).
             switch e.keyCode {
-            case 51:        onBackspace?(); return              // Delete (backspace)
+            // Delete (backspace) → DEL as a key, so a selection is deleted. The IME
+            // deleteSurroundingText path removes text before the selection instead.
+            case 51:        onKeyCode?(67); return
             case 36, 76:    onKeyCode?(66); return              // Return / Enter → ENTER
             case 48:        onKeyCode?(61); return              // Tab → TAB
             case 53:        onKeyCode?(4);  return              // Esc → BACK
@@ -953,6 +963,34 @@ final class MirrorInputView: NSView {
 
     // Consume key-ups so they don't ring the system bell at the responder chain end.
     override func keyUp(with e: NSEvent) {}
+
+    // MARK: Edit shortcuts → phone
+
+    /// ⌘A / ⌘X / ⌘C / ⌘V act on the phone, whose text views read Ctrl+A/X/C/V as
+    /// select all / cut / copy / paste. Claimed as key equivalents (the window
+    /// offers them to its views before the main menu) and also answered as the
+    /// standard Edit-menu actions below, so either route reaches the phone.
+    override func performKeyEquivalent(with e: NSEvent) -> Bool {
+        guard window?.firstResponder === self,
+              e.modifierFlags.intersection([.command, .control, .option, .shift]) == .command
+        else { return super.performKeyEquivalent(with: e) }
+        switch e.charactersIgnoringModifiers?.lowercased() {
+        case "a": selectAll(nil)
+        case "x": cut(nil)
+        case "c": copy(nil)
+        case "v": paste(nil)
+        default: return super.performKeyEquivalent(with: e)
+        }
+        return true
+    }
+
+    override func selectAll(_ sender: Any?) { onCtrlKey?(AndroidKey.a) }
+    @objc func cut(_ sender: Any?) { onCtrlKey?(AndroidKey.x) }
+    @objc func copy(_ sender: Any?) { onCtrlKey?(AndroidKey.c) }
+    /// Pasting types into the phone, so like the keyboard it waits for a focused field.
+    @objc func paste(_ sender: Any?) {
+        if phoneInputActive { onPaste?() }
+    }
 
     // Swallow editing selectors the IME emits for keys we don't model, so the
     // responder chain doesn't end in a system beep.
@@ -1078,7 +1116,8 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
         video.onScroll = { [weak self] v, x, y, w, h in self?.model.scroll(v: v, x: x, y: y, w: w, h: h) }
         video.onText = { [weak self] s in self?.model.typeText(s) }
         video.onKeyCode = { [weak self] code in self?.model.key(code) }
-        video.onBackspace = { [weak self] in self?.model.backspace() }
+        video.onCtrlKey = { [weak self] code in self?.model.key(code, meta: AndroidKey.metaCtrl) }
+        video.onPaste = { [weak self] in self?.model.pasteToPhone() }
 
         let chromeHost = NSHostingView(rootView: MirrorChromeView(
             progress: chromeProgress,

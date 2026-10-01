@@ -1594,12 +1594,22 @@ final class AppModel: ObservableObject {
     func scroll(v: Int, x: Int, y: Int, w: Int, h: Int) {
         controller.sendScroll(v: v, x: x, y: y, w: w, h: h)
     }
-    /// Press an Android navigation key (see `AndroidKey`).
-    func key(_ keycode: Int) { controller.sendKey(keycode) }
+    /// Press an Android key (see `AndroidKey`), with `meta` modifiers held.
+    func key(_ keycode: Int, meta: Int = 0) { controller.sendKey(keycode, meta: meta) }
     /// Type Unicode text into the phone's focused field.
     func typeText(_ s: String) { controller.sendText(s) }
-    /// Backspace (delete one char before the cursor).
-    func backspace() { controller.sendDeleteSurrounding(before: 1, after: 0) }
+
+    /// ⌘V in the mirror: type this Mac's clipboard text into the phone's field, so
+    /// what was copied here lands there without waiting for clipboard sync (and
+    /// even with sync off). With no text on the Mac clipboard (an image, say), fall
+    /// back to the phone's own paste (Ctrl+V), which uses the phone's clipboard.
+    func pasteToPhone() {
+        if let s = NSPasteboard.general.string(forType: .string), !s.isEmpty {
+            typeText(s)
+        } else {
+            key(AndroidKey.v, meta: AndroidKey.metaCtrl)
+        }
+    }
 
     /// Whether the phone is currently showing a secure/privacy screen.
     var privacyActive: Bool { !privacyState.isEmpty && privacyState != "clear" }

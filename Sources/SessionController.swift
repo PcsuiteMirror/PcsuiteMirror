@@ -980,11 +980,12 @@ final class SessionController {
         }
     }
 
-    /// Press an Android navigation key (down+up). `keycode` is a `KEYCODE_*` value.
-    func sendKey(_ keycode: Int) {
+    /// Press an Android key (down+up). `keycode` is a `KEYCODE_*` value; `meta` is a
+    /// `KeyEvent` `META_*` mask held for the press (0 = no modifiers).
+    func sendKey(_ keycode: Int, meta: Int = 0) {
         inputQueue.async { [self] in
             guard let s = snapshotSession() else { return }
-            _ = s.key(Int64(keycode))
+            _ = meta == 0 ? s.key(Int64(keycode)) : s.key_meta(Int64(keycode), Int64(meta))
         }
     }
 
@@ -993,14 +994,6 @@ final class SessionController {
         inputQueue.async { [self] in
             guard let s = snapshotSession() else { return }
             _ = s.text(text)
-        }
-    }
-
-    /// Delete `before` chars before / `after` chars after the cursor (Backspace).
-    func sendDeleteSurrounding(before: Int, after: Int) {
-        inputQueue.async { [self] in
-            guard let s = snapshotSession() else { return }
-            _ = s.delete_surrounding(Int64(before), Int64(after))
         }
     }
 
