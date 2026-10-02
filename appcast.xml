@@ -9,6 +9,61 @@
     <language>en</language>
     <!-- BEGIN-ITEMS (release.sh inserts new entries here, newest first) -->
     <item>
+      <title>v0.1.8</title>
+      <pubDate>Fri, 02 Oct 2026 03:42:21 +0000</pubDate>
+      <sparkle:version>16</sparkle:version>
+      <sparkle:shortVersionString>0.1.8</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<h3>PcsuiteMirror 0.1.8</h3>
+<p>The mirror window now understands the usual editing shortcuts.</p>
+<h4>New</h4>
+<ul>
+<li><strong>⌘A / ⌘X / ⌘C in the mirror</strong> — select all, cut and copy now act on the</li>
+</ul>
+<p>  phone (sent as Ctrl+A / X / C, which the phone's text fields understand). The</p>
+<p>  same commands in the menu bar's <em>Edit</em> menu work too.</p>
+<ul>
+<li><strong>⌘V pastes into the phone</strong> — the text on the Mac clipboard is typed straight</li>
+</ul>
+<p>  into the phone's focused field, so it works right away and even with clipboard</p>
+<p>  sync turned off. If the Mac clipboard holds no text, ⌘V pastes the phone's own</p>
+<p>  clipboard instead. Like typing, this only works when a text field on the phone</p>
+<p>  has focus.</p>
+<h4>Fixed</h4>
+<ul>
+<li><strong>Backspace deletes the selection</strong> — with text selected on the phone,</li>
+</ul>
+<p>  backspace used to delete the character before the selection and leave the</p>
+<p>  selected text in place. It now deletes the selected text, like a hardware</p>
+<p>  keyboard.</p>
+<h4>Requirements</h4>
+<ul>
+<li>macOS 13 (Ventura) or later; collapsible sidebar groups and menu group titles</li>
+</ul>
+<p>  need macOS 14</p>
+<ul>
+<li><strong>Apple Silicon (arm64)</strong> — this build is arm64-only</li>
+<li>USB: just plug in and authorize USB debugging. Wi-Fi: set your vivo-account</li>
+</ul>
+<p>  <code>openID</code> once in the menu-bar identity settings (see the README).</p>
+<h4>Install</h4>
+<p>If you have 0.1.6 or later, the app offers this update itself — click</p>
+<p><em>Update available</em> in the menu (or <em>Check for Updates…</em>).</p>
+<p>Otherwise: the build is signed with a Developer ID certificate and **notarized by</p>
+<p>Apple**, so it opens normally:</p>
+<p>1. Quit any running PcsuiteMirror, open the <code>.dmg</code> and drag</p>
+<p>   <strong>PcsuiteMirror.app</strong> to <strong>Applications</strong> (replace the old copy).</p>
+<p>2. Launch it from Applications. (It's a menu-bar app — look for its icon in the</p>
+<p>   menu bar, not the Dock.)</p>
+<p>The <code>.zip</code> is the same notarized app if you prefer that over the disk image.</p>
+<h4>License</h4>
+<p>GPLv3 — Copyright (C) 2026 xVanTuring.</p>
+<p><a href="https://github.com/PcsuiteMirror/PcsuiteMirror/releases/tag/v0.1.8">View full release on GitHub →</a></p>
+      ]]></description>
+      <enclosure url="https://github.com/PcsuiteMirror/PcsuiteMirror/releases/download/v0.1.8/PcsuiteMirror-0.1.8.zip" length="5414743" type="application/octet-stream" sparkle:edSignature="ku/sEvu7T7ZlZPZk9LMwQAw+Q8FrQiDDcEoBnVY55Jfa+7chT5ibjF3hP8nTjK3s0qBM1MKC2ekauyQTvu8JBg==" />
+    </item>
+    <item>
       <title>v0.1.7</title>
       <pubDate>Wed, 30 Sep 2026 09:41:51 +0000</pubDate>
       <sparkle:version>15</sparkle:version>
